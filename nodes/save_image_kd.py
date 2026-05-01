@@ -53,7 +53,7 @@ class SaveImageKD:
                 "subfolder_name":          ("STRING",  {"default": "subfolder"}),
                 "auto_version_subfolder":  ("BOOLEAN", {"default": False}),
                 # --- gap inserted here by JS ---
-                "compression_level":       ("INT",     {"default": 6,    "min": 0, "max": 9}),
+                "compression_level":       ("INT",     {"default": 4,    "min": 0, "max": 9}),
                 "embed_workflow":          ("BOOLEAN", {"default": True}),
             },
             "hidden": {
