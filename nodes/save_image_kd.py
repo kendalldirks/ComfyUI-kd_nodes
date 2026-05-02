@@ -1,6 +1,8 @@
 import os.path
 import json, re
 import numpy as np
+import torch
+import torch.nn.functional as F
 import folder_paths
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
@@ -13,6 +15,17 @@ def build_png_metadata(prompt=None, extra_pnginfo=None):
         for x in extra_pnginfo:
             metadata.add_text(x, json.dumps(extra_pnginfo[x]))
     return metadata
+
+def apply_mask_as_alpha(img: Image.Image, mask_tensor, target_size: tuple) -> Image.Image:
+    if mask_tensor.dtype == torch.float16:
+        mask_tensor = mask_tensor.to(torch.float32)
+    w, h = target_size
+    mask_tensor = mask_tensor.unsqueeze(0).unsqueeze(0)         # (1, 1, H, W)
+    mask_tensor = F.interpolate(mask_tensor, size=(h, w), mode='bicubic', align_corners=False)
+    mask_tensor = mask_tensor.squeeze(0).squeeze(0)             # (H, W)
+    a = np.clip(255. * mask_tensor.cpu().numpy(), 0, 255).astype(np.uint8)
+    img.putalpha(Image.fromarray(a, mode='L'))
+    return img
 
 def get_versioned_subfolder_name(parent_dir, subfolder_name):
     if not os.path.exists(parent_dir):
@@ -45,7 +58,7 @@ class SaveImageKD:
             "required": {
                 "images": ("IMAGE", {"tooltip": "The images to save."}),
                 "save_path":               ("STRING",  {"default": ""}),
-                "filename_prefix":         ("STRING",  {"default": "image"}),
+                "filename_prefix":         ("STRING",  {"default": "comfyui_"}),
                 "sequence_start_index":    ("INT",     {"default": 1,    "min": 0, "max": 99999}),
                 "zero_padding":            ("INT",     {"default": 4,    "min": 0, "max": 9}),
                 # --- gap inserted here by JS ---
@@ -53,8 +66,12 @@ class SaveImageKD:
                 "subfolder_name":          ("STRING",  {"default": "subfolder"}),
                 "auto_version_subfolder":  ("BOOLEAN", {"default": False}),
                 # --- gap inserted here by JS ---
+                "allow_overwrites": ("BOOLEAN", {"default": False}),
                 "compression_level":       ("INT",     {"default": 4,    "min": 0, "max": 9}),
                 "embed_workflow":          ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "mask": ("MASK",),
             },
             "hidden": {
                 "prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"
@@ -71,13 +88,15 @@ class SaveImageKD:
     DESCRIPTION = "Saves the input images to the specified save path."
 
 
-    def save_images(self,images, save_path, filename_prefix, sequence_start_index, zero_padding, create_subfolder, subfolder_name, auto_version_subfolder, compression_level, embed_workflow, prompt=None, extra_pnginfo=None):
+    def save_images(self, images, save_path, filename_prefix, sequence_start_index, zero_padding, create_subfolder, subfolder_name, auto_version_subfolder, compression_level, embed_workflow, allow_overwrites, mask=None, prompt=None, extra_pnginfo=None):
 
         if not os.path.isabs(save_path):
             save_path = os.path.join(folder_paths.get_output_directory(), save_path)
 
         if create_subfolder:
             subfolder_name = subfolder_name.strip().strip("/\\")
+            if not subfolder_name:
+                raise ValueError("subfolder_name cannot be empty.")
             if auto_version_subfolder:
                 subfolder_name = get_versioned_subfolder_name(os.path.abspath(save_path), subfolder_name)
             final_save_path = os.path.join(save_path, subfolder_name)
@@ -90,12 +109,21 @@ class SaveImageKD:
 
         counter = sequence_start_index
 
-        for image in images:
+        mask_iter = mask if mask is not None else [None] * len(images)
+
+        for image, alpha in zip(images, mask_iter):
             i = 255. * image.cpu().numpy()
             img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
 
-            filename = f"{filename_prefix}{counter:0{zero_padding}d}"
-            filename = f"{filename}.png"
+            if alpha is not None:
+                img = apply_mask_as_alpha(img, alpha, img.size)
+
+            filename = f"{filename_prefix}{counter:0{zero_padding}d}.png"
+
+            if not allow_overwrites:
+                while os.path.exists(os.path.join(final_save_path, filename)):
+                    counter += 1
+                    filename = f"{filename_prefix}{counter:0{zero_padding}d}.png"
 
             if embed_workflow:
                 metadata = build_png_metadata(prompt, extra_pnginfo)

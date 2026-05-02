@@ -1,0 +1,97 @@
+// js/clipboard_paste.js
+import { app } from "../../scripts/app.js";
+
+app.registerExtension({
+    name: "kd_nodes.ClipboardPaste",
+
+    async setup() {
+        document.addEventListener("paste", async (e) => {
+            console.error("[kd_nodes] paste fired", Array.from(e.clipboardData.items).map(i => i.type));
+
+            const target = e.target;
+            const comfyWillHandle =
+                target.classList.contains("litegraph") ||
+                target.classList.contains("graph-canvas-container") ||
+                target.id === "graph-canvas";
+
+            if (comfyWillHandle) return;
+
+            const clipboardData = e.clipboardData;
+            if (!clipboardData) return;
+
+            console.error("[kd_nodes] items:", Array.from(clipboardData.items).map(i => i.type));
+            console.error("[kd_nodes] text value:", clipboardData.getData("text/plain"));
+
+            const imageItem = Array.from(clipboardData.items).find(
+                (item) => item.type.startsWith("image/")
+            );
+            console.error("[kd_nodes] imageItem found:", imageItem);
+            if (imageItem) {
+                e.preventDefault();
+                const blob = imageItem.getAsFile();
+                await handleImagePaste(blob);
+                return;
+            }
+
+            // Text
+            const text = clipboardData.getData("text/plain");
+            if (text && text.trim()) {
+                e.preventDefault();
+                handleTextPaste(text);
+                return;
+            }
+        }, true);
+    },
+});
+
+async function handleImagePaste(blob) {
+    const formData = new FormData();
+    formData.append("image", blob, `paste_${Date.now()}.png`);
+
+    const resp = await fetch("/upload/image", { method: "POST", body: formData });
+    if (!resp.ok) {
+        console.error("[kd_nodes] Image upload failed:", resp.status);
+        return;
+    }
+    const { name, subfolder } = await resp.json();
+
+    const node = LiteGraph.createNode("LoadImage");
+    if (!node) {
+        console.error("[kd_nodes] Could not create LoadImage node");
+        return;
+    }
+
+    app.graph.add(node);
+
+    node.pos = [
+        app.canvas.graph_mouse[0] - node.size[0] / 2,
+        app.canvas.graph_mouse[1] - node.size[1] / 2,
+    ];
+
+    const imageWidget = node.widgets?.find((w) => w.name === "image");
+    if (imageWidget) {
+        imageWidget.value = subfolder ? `${subfolder}/${name}` : name;
+        delete app.nodeOutputs[node.id];
+        imageWidget.callback?.(imageWidget.value);
+    }
+}
+
+function handleTextPaste(text) {
+    const node = LiteGraph.createNode("PrimitiveStringMultiline");
+    if (!node) {
+        console.error("[kd_nodes] Could not create PrimitiveStringMultiline node");
+        return;
+    }
+
+    app.graph.add(node);
+
+    node.pos = [
+        app.canvas.graph_mouse[0] - node.size[0] / 2,
+        app.canvas.graph_mouse[1] - node.size[1] / 2,
+    ];
+
+    const textWidget = node.widgets?.find((w) => w.name === "value");
+    if (textWidget) textWidget.value = text;
+
+    app.graph.setDirtyCanvas(true, true);
+}
