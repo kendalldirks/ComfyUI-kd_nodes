@@ -533,6 +533,7 @@ class PreviewAnimationKD:
         return {"required":
                     {
                      "fps": ("FLOAT", {"default": 8.0, "min": 0.01, "max": 1000.0, "step": 0.01}),
+                     "disable_mask_preview": ("BOOLEAN", {"default": False}),
                      },
                 "optional": {
                     "images": ("IMAGE", ),
@@ -546,7 +547,7 @@ class PreviewAnimationKD:
     OUTPUT_NODE = True
     CATEGORY = "KDNodes/image"
 
-    def preview(self, fps, images=None, masks=None):
+    def preview(self, fps, disable_mask_preview, images=None, masks=None):
         filename_prefix = "AnimPreview"
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(filename_prefix, self.output_dir)
         results = list()
@@ -558,17 +559,18 @@ class PreviewAnimationKD:
                 i = 255. * image.cpu().numpy()
                 img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
                 pil_images.append(img)
-            for mask in masks:
-                if pil_images:
-                    mask_np = mask.cpu().numpy()
-                    mask_np = np.clip(mask_np * 255, 0, 255).astype(np.uint8)
-                    mask_img = Image.fromarray(mask_np, mode='L')
-                    img = pil_images.pop(0)
-                    img = img.convert("RGBA")
-                    rgba_mask_img = Image.new("RGBA", img.size, (255, 255, 255, 255))
-                    rgba_mask_img.putalpha(mask_img)
-                    composited_img = Image.alpha_composite(img, rgba_mask_img)
-                    pil_images.append(composited_img)
+            if not disable_mask_preview:
+                for mask in masks:
+                    if pil_images:
+                        mask_np = mask.cpu().numpy()
+                        mask_np = np.clip(mask_np * 255, 0, 255).astype(np.uint8)
+                        mask_img = Image.fromarray(mask_np, mode='L')
+                        img = pil_images.pop(0)
+                        img = img.convert("RGBA")
+                        rgba_mask_img = Image.new("RGBA", img.size, (255, 255, 255, 255))
+                        rgba_mask_img.putalpha(mask_img)
+                        composited_img = Image.alpha_composite(img, rgba_mask_img)
+                        pil_images.append(composited_img)
 
         elif images is not None and masks is None:
             for image in images:
