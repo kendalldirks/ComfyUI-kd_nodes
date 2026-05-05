@@ -537,11 +537,11 @@ class PreviewAnimationKD:
                 "optional": {
                     "images": ("IMAGE", ),
                     "masks": ("MASK", ),
-                    "passthrough": (any, {}),
+                    "passthrough": ("*", {}),
                 },
             }
 
-    RETURN_TYPES = (any,)
+    RETURN_TYPES = ("*",)
     RETURN_NAMES = ("passthrough",)
     FUNCTION = "preview"
     OUTPUT_NODE = True
