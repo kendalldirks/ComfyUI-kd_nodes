@@ -13,6 +13,7 @@ NODE_CONFIG = {
     "ImageRebatchOverlap": {"class": ImageRebatchOverlap, "name": "Rebatch Images Overlap"},
     "UnbatchImagesOverlapBlend": {"class": UnbatchImagesOverlapBlend, "name": "Unbatch Images Overlap Blend"},
     "PreviewImageKD": {"class": PreviewImageKD, "name": "Preview Image KD"},
+    "PreviewAnimationKD": {"class": PreviewAnimationKD, "name": "Preview Animation KD"},
 
 
     #utility nodes
