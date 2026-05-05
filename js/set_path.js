@@ -1,10 +1,22 @@
 import { app } from "../../../scripts/app.js";
 
+function insertGapAfter(node, widgetName, height = 8) {
+    const idx = node.widgets?.findIndex(w => w.name === widgetName);
+    if (idx == null || idx === -1) return;
+    node.widgets.splice(idx + 1, 0, {
+        name: `_gap_after_${widgetName}`,
+        type: "null",
+        draw() {},
+        computeSize: () => [0, height],
+        serializeValue: () => undefined,
+    });
+}
+
 app.registerExtension({
-    name: "Comfy.DirectoryKD",
+    name: "Comfy.SetPath",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "DirectoryKD") return;
+        if (nodeData.name !== "SetPath") return;
 
         const _onCreated = nodeType.prototype.onNodeCreated;
 
@@ -15,11 +27,11 @@ app.registerExtension({
                 const pathWidget = this.widgets.find(w => w.name === "path");
 
                 try {
-                    const res = await fetch("/directory_kd/open");
+                    const res = await fetch("/set_path/open");
                     const data = await res.json();
 
                     if (!res.ok) {
-                        alert(`Directory KD error:\n${data.error}`);
+                        alert(`Set Path error:\n${data.error}`);
                         return;
                     }
 
@@ -32,12 +44,14 @@ app.registerExtension({
                 }
             });
 
+            insertGapAfter(this, "Browse", 4);
+
             const pathWidget = this.widgets.find(w => w.name === "path");
             if (pathWidget) {
                 pathWidget.computedHeight = 60;
             }
 
-            this.setSize([this.size[0], this.computeSize()[1] + 10]);
+            this.setSize([this.size[0], this.computeSize()[1]]);
             app.graph.setDirtyCanvas(true);
         };
     },

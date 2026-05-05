@@ -1,6 +1,6 @@
 from .nodes.image_nodes import *
 from .nodes.utility_nodes import *
-from .nodes.directory_kd import *
+from .nodes.set_path import *
 from .nodes.save_image_kd import *
 from .nodes.load_image_kd import *
 
@@ -20,7 +20,7 @@ NODE_CONFIG = {
     "StringToInt": {"class": StringToInt, "name": "String to Integer"},
     "IntToString": {"class": IntToString, "name": "Integer to String"},
     "PurgeVRAM": {"class": PurgeVRAM, "name": "Purge VRAM"},
-    "DirectoryKD": {"class": DirectoryKD, "name": "Directory KD"},
+    "SetPath": {"class": SetPath, "name": "Set Path"},
 }
 
 def generate_node_mappings(node_config):

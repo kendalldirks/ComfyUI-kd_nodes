@@ -10,24 +10,39 @@ app.registerExtension({
         node.onExecuted = function(output) {
             origOnExecuted?.(output);
 
-            // Only add the button once
-            if (node.widgets?.some(w => w.name === "Copy to Clipboard")) return;
+            setTimeout(() => {
+                // Remove existing button and gap if present
+                ["Copy to Clipboard", "_gap_after_Copy to Clipboard"].forEach(name => {
+                    const idx = node.widgets?.findIndex(w => w.name === name);
+                    if (idx !== -1) node.widgets.splice(idx, 1);
+                });
 
-            const btn = node.addWidget("button", "Copy to Clipboard", null, async () => {
-                try {
-                    const response = await fetch(node.imgs[0].src);
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    const blob = await response.blob();
-                    const pngBlob = blob.type === "image/png" ? blob : await convertToPng(blob);
-                    await navigator.clipboard.write([
-                        new ClipboardItem({ "image/png": pngBlob })
-                    ]);
-                } catch (err) {
-                    console.error("[PreviewImageKD] Copy failed:", err);
-                    alert("Copy failed: " + err.message);
-                }
-            });
-            btn.serialize = false;
+                const btn = node.addWidget("button", "Copy to Clipboard", null, async () => {
+                    try {
+                        const response = await fetch(node.imgs[0].src);
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const blob = await response.blob();
+                        const pngBlob = blob.type === "image/png" ? blob : await convertToPng(blob);
+                        await navigator.clipboard.write([
+                            new ClipboardItem({ "image/png": pngBlob })
+                        ]);
+                    } catch (err) {
+                        console.error("[PreviewImageKD] Copy failed:", err);
+                        alert("Copy failed: " + err.message);
+                    }
+                });
+                btn.serialize = false;
+
+                node.widgets.push({
+                    name: "_gap_after_Copy to Clipboard",
+                    type: "null",
+                    draw() {},
+                    computeSize: () => [0, 4],
+                    serializeValue: () => undefined,
+                });
+
+                app.graph.setDirtyCanvas(true);
+            }, 500);
         };
     },
 });

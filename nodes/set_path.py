@@ -8,26 +8,35 @@ def install_pyqt():
 
 try:
     from PyQt5.QtWidgets import QApplication, QFileDialog
+    from PyQt5.QtCore import Qt
 except ImportError:
-    print("[DirectoryKD] PyQt5 not found, installing...")
+    print("[SetPath] PyQt5 not found, installing...")
     install_pyqt()
     from PyQt5.QtWidgets import QApplication, QFileDialog
-    print("[DirectoryKD] PyQt5 installed successfully")
+    from PyQt5.QtCore import Qt
+    print("[SetPath] PyQt5 installed successfully")
 
 def _open_directory_dialog():
     app = QApplication.instance() or QApplication(sys.argv)
-    path = QFileDialog.getExistingDirectory(None, "Select Directory")
-    return path or ""
+    dialog = QFileDialog()
+    dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
+    dialog.setWindowModality(Qt.ApplicationModal)
+    dialog.setFileMode(QFileDialog.Directory)
+    dialog.setOption(QFileDialog.ShowDirsOnly, True)
+    dialog.exec_()
+    if dialog.result() == QFileDialog.Accepted:
+        return dialog.selectedFiles()[0]
+    return ""
 
-@PromptServer.instance.routes.get("/directory_kd/open")
-async def open_directory_kd(request):
+@PromptServer.instance.routes.get("/set_path/open")
+async def open_set_path(request):
     try:
         path = _open_directory_dialog()
         return web.json_response({"path": path or ""})
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
-class DirectoryKD:
+class SetPath:
     @classmethod
     def INPUT_TYPES(cls):
         return {
