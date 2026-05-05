@@ -1,0 +1,6 @@
+@echo off
+git fetch origin
+git reset --hard origin/main
+git pull
+echo Done!
+pause
