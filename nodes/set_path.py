@@ -23,6 +23,9 @@ def _open_directory_dialog():
     dialog.setWindowModality(Qt.ApplicationModal)
     dialog.setFileMode(QFileDialog.Directory)
     dialog.setOption(QFileDialog.ShowDirsOnly, True)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
     dialog.exec_()
     if dialog.result() == QFileDialog.Accepted:
         return dialog.selectedFiles()[0]
