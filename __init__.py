@@ -3,6 +3,7 @@ from .nodes.utility_nodes import *
 from .nodes.set_path import *
 from .nodes.save_image_kd import *
 from .nodes.load_image_kd import *
+from .nodes.datatype import *
 
 NODE_CONFIG = {
     #image nodes
@@ -22,6 +23,7 @@ NODE_CONFIG = {
     "IntToString": {"class": IntToString, "name": "Integer to String"},
     "PurgeVRAM": {"class": PurgeVRAM, "name": "Purge VRAM"},
     "SetPath": {"class": SetPath, "name": "Set Path"},
+    "Datatype": {"class": Datatype, "name": "Data Type"},
 }
 
 def generate_node_mappings(node_config):
