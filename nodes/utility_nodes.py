@@ -120,3 +120,28 @@ class PurgeVRAM:
             PromptServer.instance.prompt_queue.set_flag("free_memory", True)
 
         return (anything,)
+
+
+class RaiseError:
+    """
+    A ComfyUI node that raises an error, printing a custom message.
+    The workflow halts before the output is passed through.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "message": ("STRING", {"default": "An error occurred."}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("passthrough",)
+    FUNCTION = "raise_error"
+    CATEGORY = "KDNodes/utility"
+
+    def raise_error(self, message):
+        raise Exception(f"[RaiseErrorNode] {message}")
+        return (message,)  # Never reached, but satisfies ComfyUI's type system
+

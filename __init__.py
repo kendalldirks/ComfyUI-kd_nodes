@@ -32,6 +32,7 @@ NODE_CONFIG = {
     "PurgeVRAM": {"class": PurgeVRAM, "name": "Purge VRAM"},
     "SetPath": {"class": SetPath, "name": "Set Path"},
     "Datatype": {"class": Datatype, "name": "Data Type"},
+    "RaiseError": {"class": RaiseError, "name": "Raise Error"},
 }
 
 def generate_node_mappings(node_config):
