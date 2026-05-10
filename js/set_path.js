@@ -23,7 +23,11 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             _onCreated?.apply(this, arguments);
 
+            let isBrowsing = false;
+
             this.addWidget("button", "Browse", null, async () => {
+                if (isBrowsing) return;
+                isBrowsing = true;
                 const pathWidget = this.widgets.find(w => w.name === "path");
 
                 try {
@@ -41,6 +45,8 @@ app.registerExtension({
                     }
                 } catch (err) {
                     alert(`Could not open directory picker:\n${err.message}`);
+                } finally {
+                    isBrowsing = false;
                 }
             });
 

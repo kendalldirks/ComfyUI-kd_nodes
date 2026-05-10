@@ -22,7 +22,7 @@ NODE_CONFIG = {
     "PreviewAnimationKD": {"class": PreviewAnimationKD, "name": "Preview Animation KD"},
 
     #video nodes
-#    "LoadVideoKD": {"class": LoadVideoKD, "name": "Load Video KD"},
+    "LoadVideoKD": {"class": LoadVideoKD, "name": "Load Video KD"},
     "SaveVideoKD": {"class": SaveVideoKD, "name": "Save Video KD"},
 
     #utility nodes

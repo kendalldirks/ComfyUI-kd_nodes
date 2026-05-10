@@ -1,4 +1,5 @@
 import os
+import asyncio
 import cv2
 import hashlib
 import itertools
@@ -116,64 +117,106 @@ async def open_video_dialog(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
-# --- Video serving route for preview (ffmpeg transcode) ---
+# --- Video serving route for preview (async streaming ffmpeg transcode) ---
 
 @PromptServer.instance.routes.get("/kd_nodes/view_video")
 async def view_video(request):
-    filename = request.query.get("filename", "")
+    query = request.rel_url.query
+    filename = query.get("filename", "")
     if not filename or not os.path.isfile(filename):
         return web.Response(status=404, text="File not found")
 
     ext = os.path.splitext(filename)[1].lower()
 
-    # Formats/codecs browsers can generally play natively
-    browser_safe = {'.mp4', '.webm', '.gif'}
+    # GIFs can be served directly as images
+    if ext == '.gif':
+        return web.FileResponse(filename, headers={"Content-Type": "image/gif"})
 
-    if ext in browser_safe:
-        content_types = {
-            '.mp4': 'video/mp4',
-            '.webm': 'video/webm',
-            '.gif': 'image/gif',
-        }
-        return web.FileResponse(filename, headers={
-            "Content-Type": content_types.get(ext, 'video/mp4')
-        })
-
-    # Transcode to H.264 MP4 via ffmpeg for browser playback
     if FFMPEG_PATH is None:
-        # No ffmpeg available, try serving raw and hope the browser can handle it
         return web.FileResponse(filename)
 
-    # Cache transcoded file in temp directory
-    file_hash = hashlib.md5(filename.encode()).hexdigest()[:12]
-    mod_time = str(os.path.getmtime(filename)).replace('.', '_')
-    cache_name = f"kd_preview_{file_hash}_{mod_time}.mp4"
-    cache_dir = folder_paths.get_temp_directory()
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_path = os.path.join(cache_dir, cache_name)
+    in_args = ["-i", filename]
 
-    if not os.path.isfile(cache_path):
+    # Prepass to detect source codec and fps
+    base_fps = 30
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFMPEG_PATH, *in_args, '-t', '0', '-f', 'null', '-',
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL
+        )
+        _, res_stderr = await proc.communicate()
+        match = re.search(': Video: (\\w+) .+, (\\d+) fps,', res_stderr.decode(*ENCODE_ARGS))
+        if match:
+            base_fps = float(match.group(2))
+            if match.group(1) == 'vp9':
+                in_args = ['-c:v', 'libvpx-vp9'] + in_args
+    except Exception as e:
+        logger.warn(f"ffmpeg prepass failed for {filename}: {e}")
+
+    vfilters = []
+
+    # Apply frame rate
+    target_rate = base_fps
+    modified_rate = target_rate / (float(query.get('select_every_nth', 1)) or 1)
+
+    # Apply skip/seek
+    start_time = 0
+    if float(query.get('skip_first_frames', 0)) > 0:
+        start_time = float(query.get('skip_first_frames')) / target_rate
+        if start_time > 1 / modified_rate:
+            start_time += 1 / modified_rate
+
+    if start_time > 0:
+        if start_time > 4:
+            post_seek = ['-ss', '4']
+            pre_seek = ['-ss', str(start_time - 4)]
+        else:
+            post_seek = ['-ss', str(start_time)]
+            pre_seek = []
+    else:
+        pre_seek = []
+        post_seek = []
+
+    args = [FFMPEG_PATH, "-v", "error"] + pre_seek + in_args + post_seek
+    args += ['-r', str(modified_rate)]
+
+    # Apply scaling
+    force_size = query.get('force_size', '')
+    if force_size and force_size != 'Disabled':
+        size = force_size.split('x')
+        if size[0] == '?' or size[1] == '?':
+            size[0] = "-2" if size[0] == '?' else f"'min({size[0]},iw)'"
+            size[1] = "-2" if size[1] == '?' else f"'min({size[1]},ih)'"
+        size = ':'.join(size)
+        vfilters.append(f"scale={size}")
+
+    if len(vfilters) > 0:
+        args += ["-vf", ",".join(vfilters)]
+
+    # Apply frame cap
+    if float(query.get('frame_load_cap', 0)) > 0:
+        args += ["-frames:v", query['frame_load_cap'].split('.')[0]]
+
+    # Encode to VP9 WebM with realtime deadline for speed
+    args += ['-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8',
+             '-an', '-f', 'webm', '-']
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL
+        )
         try:
-            args = [
-                FFMPEG_PATH,
-                "-i", filename,
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
-                "-pix_fmt", "yuv420p",
-                "-an",  # no audio needed for preview
-                "-y",   # overwrite
-                cache_path
-            ]
-            subprocess.run(args, capture_output=True, check=True)
-        except subprocess.CalledProcessError as e:
-            logger.warn(f"Failed to transcode {filename}: {e.stderr.decode(*ENCODE_ARGS)}")
-            return web.FileResponse(filename)
-        except Exception as e:
-            logger.warn(f"Failed to transcode {filename}: {e}")
-            return web.FileResponse(filename)
-
-    return web.FileResponse(cache_path, headers={"Content-Type": "video/mp4"})
+            resp = web.StreamResponse()
+            resp.content_type = 'video/webm'
+            await resp.prepare(request)
+            while len(bytes_read := await proc.stdout.read(2**20)) != 0:
+                await resp.write(bytes_read)
+            await proc.wait()
+        except (ConnectionResetError, ConnectionError):
+            proc.kill()
+    except BrokenPipeError:
+        pass
+    return resp
 
 
 # --- Utility functions ---

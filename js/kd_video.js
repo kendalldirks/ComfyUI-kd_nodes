@@ -137,18 +137,24 @@ function addVideoPreview(nodeType) {
             params.timestamp = Date.now()
             this.parentEl.hidden = this.value.hidden;
 
-            let url = api.apiURL('/kd_nodes/view_video?' + new URLSearchParams({
-                filename: params.filename,
-                timestamp: params.timestamp
-            }));
-
             if (params.format?.split('/')[0] == 'image') {
+                let url = api.apiURL('/kd_nodes/view_video?' + new URLSearchParams({
+                    filename: params.filename,
+                    timestamp: params.timestamp
+                }));
                 this.imgEl.src = url;
                 this.videoEl.hidden = true;
                 this.imgEl.hidden = false;
             } else {
+                // Calculate target width for preview scaling (same as VHS)
+                let target_width = (previewNode.size[0] - 20) * 2 || 256;
+                if (target_width < 256) {
+                    target_width = 256;
+                }
+                params.force_size = target_width + "x?"
+
                 this.videoEl.autoplay = !this.value.paused && !this.value.hidden;
-                this.videoEl.src = url;
+                this.videoEl.src = api.apiURL('/kd_nodes/view_video?' + new URLSearchParams(params));
                 this.videoEl.hidden = false;
                 this.imgEl.hidden = true;
             }
@@ -160,8 +166,11 @@ function addVideoPreview(nodeType) {
 function addBrowseWidget(nodeType, widgetName) {
     chainCallback(nodeType.prototype, "onNodeCreated", function() {
         const pathWidget = this.widgets.find((w) => w.name === widgetName);
+        let isBrowsing = false;
 
         let browseWidget = this.addWidget("button", "Browse", null, async () => {
+            if (isBrowsing) return;
+            isBrowsing = true;
             app.canvas.node_widget = null;
             try {
                 const res = await fetch("/kd_nodes/open_video");
@@ -181,9 +190,24 @@ function addBrowseWidget(nodeType, widgetName) {
                 }
             } catch (err) {
                 alert("Could not open video picker:\n" + err.message);
+            } finally {
+                isBrowsing = false;
             }
         });
         browseWidget.options.serialize = false;
+
+        // Move browse button to just before the video preview widget
+        setTimeout(() => {
+            const browseIdx = this.widgets.findIndex((w) => w.name === "Browse");
+            const previewIdx = this.widgets.findIndex((w) => w.name === "videopreview");
+            if (browseIdx > -1 && previewIdx > -1 && browseIdx > previewIdx) {
+                const [btn] = this.widgets.splice(browseIdx, 1);
+                const newPreviewIdx = this.widgets.findIndex((w) => w.name === "videopreview");
+                this.widgets.splice(newPreviewIdx, 0, btn);
+            }
+            this.setSize(this.computeSize());
+            app.graph.setDirtyCanvas(true);
+        }, 0);
     });
 }
 
