@@ -75,7 +75,7 @@ except ImportError:
     print("[LoadVideoKD] PyQt5 installed successfully")
 
 
-def _open_video_dialog():
+def _open_video_dialog(start_dir=""):
     app = QApplication.instance() or QApplication(sys.argv)
 
     # Create invisible parent at center of current screen
@@ -95,10 +95,16 @@ def _open_video_dialog():
     parent.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
     parent.show()
 
+    # If start_dir is a file path, use its parent directory
+    if start_dir and os.path.isfile(start_dir):
+        start_dir = os.path.dirname(start_dir)
+    elif start_dir and not os.path.isdir(start_dir):
+        start_dir = ""
+
     path, _ = QFileDialog.getOpenFileName(
         parent,
         "Select Video File",
-        "",
+        start_dir,
         "Video files (*.mp4 *.webm *.mkv *.gif *.mov);;All files (*)"
     )
 
@@ -111,7 +117,8 @@ def _open_video_dialog():
 @PromptServer.instance.routes.get("/kd_nodes/open_video")
 async def open_video_dialog(request):
     try:
-        path = _open_video_dialog()
+        start_dir = request.query.get("path", "")
+        path = _open_video_dialog(start_dir)
         return web.json_response({"path": path or ""})
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)

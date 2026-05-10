@@ -173,7 +173,9 @@ function addBrowseWidget(nodeType, widgetName) {
             isBrowsing = true;
             app.canvas.node_widget = null;
             try {
-                const res = await fetch("/kd_nodes/open_video");
+                const currentPath = pathWidget?.value || "";
+                const params = new URLSearchParams({path: currentPath});
+                const res = await fetch("/kd_nodes/open_video?" + params);
                 const data = await res.json();
 
                 if (!res.ok) {
@@ -310,6 +312,14 @@ app.registerExtension({
                     widget.callback?.(widget.value)
                 }
             }
+
+            // Restore preview when workflow is loaded/configured
+            chainCallback(this, "onConfigure", function() {
+                const pw = this.widgets.find((w) => w.name === "video");
+                if (pw?.value) {
+                    pw.callback?.(pw.value);
+                }
+            });
         });
     },
 });
