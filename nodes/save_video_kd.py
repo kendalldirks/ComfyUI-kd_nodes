@@ -71,9 +71,9 @@ class SaveVideoKD:
             "required": {
                 "images": ("IMAGE",   {"tooltip": "The image batch to encode as video frames."}),
                 "save_path": ("STRING", {"default": ""}),
+                "filename_prefix": ("STRING", {"default": "video"}),
                 "frame_rate": ("FLOAT",   {"default": 24.0, "min": 1.0, "max": 120.0, "step": 0.01}),
-                "codec_quality": ("INT",     {"default": 20,   "min": 0,   "max": 51, "tooltip": "H.264 CRF value.  Lower = higher quality / larger file.  0 = lossless, 18‑23 = visually transparent, 28+ = noticeable compression."}),
-                "filename_prefix": ("STRING",  {"default": "video"}),
+                "codec_CRF": ("INT",     {"default": 18,   "min": 0,   "max": 51, "tooltip": "H.264 CRF value.  Lower = higher quality / larger file.  0 = lossless, 18‑23 = visually transparent, 28+ = noticeable compression."}),
                 "allow_overwrites": ("BOOLEAN", {"default": False}),
             },
             "optional": {
