@@ -104,7 +104,7 @@ class SaveVideoKD:
         self,
         images,
         frame_rate,
-        codec_quality,
+        codec_CRF,
         save_path,
         filename_prefix,
         allow_overwrites,
@@ -174,12 +174,12 @@ class SaveVideoKD:
         # ----- encode -----
         if has_audio:
             self._encode_with_audio(
-                images_iter, w, h, frame_rate, codec_quality,
+                images_iter, w, h, frame_rate, codec_CRF,
                 out_path, waveform, sample_rate, num_frames,
             )
         else:
             self._encode_silent(
-                images_iter, w, h, frame_rate, codec_quality, out_path,
+                images_iter, w, h, frame_rate, codec_CRF, out_path,
             )
 
         return (out_filename,)
