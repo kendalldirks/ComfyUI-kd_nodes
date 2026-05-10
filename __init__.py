@@ -1,9 +1,14 @@
+from .nodes.ffmpeg_helper import ensure_ffmpeg
+ensure_ffmpeg()
+
 from .nodes.image_nodes import *
 from .nodes.utility_nodes import *
 from .nodes.set_path import *
 from .nodes.save_image_kd import *
 from .nodes.load_image_kd import *
 from .nodes.datatype import *
+from .nodes.load_video_kd import *
+from .nodes.save_video_kd import *
 
 NODE_CONFIG = {
     #image nodes
@@ -16,6 +21,9 @@ NODE_CONFIG = {
     "PreviewImageKD": {"class": PreviewImageKD, "name": "Preview Image KD"},
     "PreviewAnimationKD": {"class": PreviewAnimationKD, "name": "Preview Animation KD"},
 
+    #video nodes
+#    "LoadVideoKD": {"class": LoadVideoKD, "name": "Load Video KD"},
+    "SaveVideoKD": {"class": SaveVideoKD, "name": "Save Video KD"},
 
     #utility nodes
     "ItemFromListString": {"class": ItemFromListString, "name": "Item From List (String)"},
