@@ -207,7 +207,7 @@ function addBrowseWidget(nodeType, widgetName) {
                 const newPreviewIdx = this.widgets.findIndex((w) => w.name === "videopreview");
                 this.widgets.splice(newPreviewIdx, 0, btn);
             }
-            this.setSize(this.computeSize());
+            this.setSize([this.size[0], this.computeSize([this.size[0], this.size[1]])[1]]);
             app.graph.setDirtyCanvas(true);
         }, 0);
     });
