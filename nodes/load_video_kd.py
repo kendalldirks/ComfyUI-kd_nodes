@@ -205,7 +205,7 @@ async def view_video(request):
         args += ["-frames:v", query['frame_load_cap'].split('.')[0]]
 
     # Encode to VP9 WebM with realtime deadline for speed
-    args += ['-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8',
+    args += ['-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '6',
              '-an', '-f', 'webm', '-']
 
     try:
@@ -478,7 +478,7 @@ def load_video_kd(unique_id=None, generator=resized_cv_frame_gen, **kwargs):
 
     audio = lazy_get_audio(kwargs['video'], start_time, kwargs['frame_load_cap'] * target_frame_time)
 
-    return (images, len(images), audio)
+    return (images, len(images), audio, fps)
 
 
 # --- Node class ---
@@ -500,8 +500,8 @@ class LoadVideoKD:
 
     CATEGORY = "KD_Nodes/Video"
 
-    RETURN_TYPES = ("IMAGE", "INT", "AUDIO", "STRING")
-    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_path")
+    RETURN_TYPES = ("IMAGE", "INT", "AUDIO", "FLOAT", "STRING")
+    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "fps", "video_path")
 
     FUNCTION = "load_video"
 
@@ -511,8 +511,8 @@ class LoadVideoKD:
         if is_url(kwargs['video']):
             kwargs['video'] = try_download_video(kwargs['video']) or kwargs['video']
         video_path = kwargs['video']
-        images, frame_count, audio = load_video_kd(**kwargs)
-        return (images, frame_count, audio, video_path)
+        images, frame_count, audio, fps = load_video_kd(**kwargs)
+        return (images, frame_count, audio, fps, video_path)
 
     @classmethod
     def IS_CHANGED(s, video, **kwargs):
