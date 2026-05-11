@@ -205,7 +205,7 @@ async def view_video(request):
         args += ["-frames:v", query['frame_load_cap'].split('.')[0]]
 
     # Encode to VP9 WebM with realtime deadline for speed
-    args += ['-c:v', 'libvpx-vp9', '-deadline', 'good', '-cpu-used', '8',
+    args += ['-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8',
              '-an', '-f', 'webm', '-']
 
     try:
