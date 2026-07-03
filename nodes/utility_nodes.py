@@ -145,3 +145,20 @@ class RaiseError:
         raise Exception(f"[RaiseErrorNode] {message}")
         return (message,)  # Never reached, but satisfies ComfyUI's type system
 
+class NoneConstant:
+    """
+    Outputs a Python None. Feed into an optional input to make it behave as disconnected.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {}}
+
+    RETURN_TYPES = (any,)
+    RETURN_NAMES = ("none",)
+    FUNCTION = "get_none"
+    CATEGORY = "KDNodes/utility"
+
+    def get_none(self):
+        return (None,)
+

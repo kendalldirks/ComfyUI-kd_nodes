@@ -33,6 +33,7 @@ NODE_CONFIG = {
     "SetPath": {"class": SetPath, "name": "Set Path"},
     "Datatype": {"class": Datatype, "name": "Data Type"},
     "RaiseError": {"class": RaiseError, "name": "Raise Error"},
+    "NoneConstant": {"class": NoneConstant, "name": "None Constant"},
 }
 
 def generate_node_mappings(node_config):
