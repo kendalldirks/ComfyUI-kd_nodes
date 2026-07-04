@@ -308,6 +308,8 @@ function addAnimationPreview(nodeType) {
         previewWidget.value = {hidden: false, paused: false, params: {}, muted: true};
         previewWidget.parentEl = document.createElement("div");
         previewWidget.parentEl.className = "kd_video_preview";
+        previewWidget.parentEl.style.width = "100%";
+        previewWidget.parentEl.style.overflow = "hidden";
         element.appendChild(previewWidget.parentEl);
 
         const videoEl = document.createElement("video");
@@ -315,6 +317,8 @@ function addAnimationPreview(nodeType) {
         videoEl.controls = false;
         videoEl.loop = true;
         videoEl.muted = true;
+        videoEl.style.width = "100%";
+        videoEl.style.display = "block";
         videoEl.addEventListener("loadedmetadata", () => {
             previewWidget.aspectRatio = videoEl.videoWidth / videoEl.videoHeight;
             fitHeight(node);
