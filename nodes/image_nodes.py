@@ -531,6 +531,15 @@ class PreviewAnimationKD:
         return {"required":
                     {
                      "fps": ("FLOAT", {"default": 8.0, "min": 0.01, "max": 1000.0, "step": 0.01}),
+                     "crf": ("INT", {"default": 18, "min": 0, "max": 51,
+                                     "tooltip": "H.264 quality: lower = better/larger. "
+                                                "0 = lossless, ~18 visually lossless, 23 = default."}),
+                     "preset": (["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"],
+                                {"default": "veryfast"}),
+                     "max_preview_width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 8,
+                                                   "tooltip": "Downscale the preview so its width doesn't "
+                                                              "exceed this (keeps aspect ratio, never upscales). "
+                                                              "0 = full resolution."}),
                      },
                 "optional": {
                     "images": ("IMAGE", ),
@@ -560,7 +569,7 @@ class PreviewAnimationKD:
             return np.repeat(m[..., None], 3, axis=-1)
         return None
 
-    def preview(self, fps, images=None, masks=None, passthrough=None):
+    def preview(self, fps, crf, preset, max_preview_width=0, images=None, masks=None, passthrough=None):
         from .load_video_kd import FFMPEG_PATH
 
         frames = self._frames_uint8(images, masks)
@@ -578,21 +587,28 @@ class PreviewAnimationKD:
         file = f"{filename}_{counter:05}_.mp4"
         out_path = os.path.join(full_output_folder, file)
 
+        # Optional downscale (never upscale), then force even dimensions for yuv420p.
+        vf = []
+        if max_preview_width > 0:
+            vf.append(f"scale='min(iw,{int(max_preview_width)})':-2")
+        vf.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
+
         args = [
             FFMPEG_PATH, "-v", "error", "-y",
             "-f", "rawvideo", "-pix_fmt", "rgb24",
             "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
-            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-vf", ",".join(vf),
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-preset", "ultrafast", "-crf", "23",
-            "-movflags", "+faststart",
-            out_path,
+            "-preset", str(preset), "-crf", str(crf),
+            "-movflags", "+faststart", out_path,
         ]
         proc = subprocess.Popen(args, stdin=subprocess.PIPE)
         proc.stdin.write(np.ascontiguousarray(frames).tobytes())
         proc.stdin.close()
         proc.wait()
 
-        preview = {"filename": out_path, "format": "video/mp4",
-                   "frames": num_frames, "fps": float(fps), "width": W, "height": H}
+        # Served through ComfyUI's native /view route (no re-transcode) for full quality.
+        preview = {"filename": file, "subfolder": subfolder, "type": self.type,
+                   "format": "video/mp4", "frames": num_frames, "fps": float(fps),
+                   "width": W, "height": H}
         return {"ui": {"kd_video": [preview]}, "result": (passthrough,)}

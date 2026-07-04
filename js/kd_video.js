@@ -255,6 +255,93 @@ function addPreviewOptions(nodeType) {
     });
 }
 
+// --- PreviewAnimationKD: resizable video preview served via the native /view route ---
+
+// Inject once: keep the video clipped to the node body so it can't spill past the edges.
+(function ensureKdPreviewStyle() {
+    if (document.getElementById("kd_video_preview_style")) return;
+    const style = document.createElement("style");
+    style.id = "kd_video_preview_style";
+    style.textContent =
+        ".kd_video_preview{overflow:hidden;position:relative;width:100%;}" +
+        ".kd_video_preview video{display:block;width:100%;}";
+    document.head.appendChild(style);
+})();
+
+function addAnimationPreview(nodeType) {
+    chainCallback(nodeType.prototype, "onNodeCreated", function() {
+        const node = this;
+        const element = document.createElement("div");
+        const previewWidget = this.addDOMWidget("videopreview", "preview", element, {
+            serialize: false,
+            hideOnZoom: false,
+            getValue() { return element.value; },
+            setValue(v) { element.value = v; },
+        });
+
+        // VHS-style sizing: height follows node width via the video aspect ratio,
+        // so dragging the node's width resizes the preview and it never overflows.
+        previewWidget.computeSize = function(width) {
+            if (this.aspectRatio && !this.parentEl.hidden) {
+                let height = (node.size[0] - 20) / this.aspectRatio + 10;
+                if (!(height > 0)) height = 0;
+                this.computedHeight = height + 10;
+                return [width, height];
+            }
+            return [width, -4];
+        };
+
+        // Let mouse events fall through to the canvas so the node stays draggable/resizable
+        for (const [evt, cb] of [
+            ["contextmenu", "_mousedown_callback"],
+            ["pointerdown", "_mousedown_callback"],
+            ["pointermove", "_mousemove_callback"],
+            ["pointerup", "_mouseup_callback"],
+            ["mousewheel", "_mousewheel_callback"],
+        ]) {
+            element.addEventListener(evt, (e) => {
+                e.preventDefault();
+                return app.canvas[cb]?.(e);
+            }, true);
+        }
+
+        previewWidget.value = {hidden: false, paused: false, params: {}, muted: true};
+        previewWidget.parentEl = document.createElement("div");
+        previewWidget.parentEl.className = "kd_video_preview";
+        element.appendChild(previewWidget.parentEl);
+
+        const videoEl = document.createElement("video");
+        previewWidget.videoEl = videoEl;
+        videoEl.controls = false;
+        videoEl.loop = true;
+        videoEl.muted = true;
+        videoEl.addEventListener("loadedmetadata", () => {
+            previewWidget.aspectRatio = videoEl.videoWidth / videoEl.videoHeight;
+            fitHeight(node);
+        });
+        videoEl.addEventListener("error", () => {
+            previewWidget.parentEl.hidden = true;
+            fitHeight(node);
+        });
+        videoEl.onmouseenter = () => { videoEl.muted = previewWidget.value.muted; };
+        videoEl.onmouseleave = () => { videoEl.muted = true; };
+        previewWidget.parentEl.appendChild(videoEl);
+
+        // Point the preview at the mp4 the backend just wrote, via the native /view route
+        this.updateAnimPreview = (p) => {
+            previewWidget.parentEl.hidden = previewWidget.value.hidden;
+            videoEl.src = api.apiURL('/view?' + new URLSearchParams({
+                filename: p.filename,
+                subfolder: p.subfolder || "",
+                type: p.type || "temp",
+                t: Date.now(),
+            }));
+            videoEl.hidden = false;
+            videoEl.autoplay = !previewWidget.value.paused && !previewWidget.value.hidden;
+        };
+    });
+}
+
 app.registerExtension({
     name: "KD_Nodes.PreviewAnimation",
 
@@ -263,16 +350,13 @@ app.registerExtension({
             return;
         }
 
-        // Reuse the Load Video preview widget + right-click options
-        addVideoPreview(nodeType);
-        addPreviewOptions(nodeType);
+        addAnimationPreview(nodeType);
+        addPreviewOptions(nodeType);  // reuse pause/hide/mute right-click menu
 
-        // On execution, point the preview at the mp4 the backend just wrote
         chainCallback(nodeType.prototype, "onExecuted", function(message) {
             const previews = message?.kd_video;
             if (!previews || !previews.length) return;
-            const p = previews[0];
-            this.updateParameters({filename: p.filename, format: p.format || "video/mp4"}, true);
+            this.updateAnimPreview(previews[0]);
         });
     },
 });
