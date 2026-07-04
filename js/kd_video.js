@@ -256,6 +256,28 @@ function addPreviewOptions(nodeType) {
 }
 
 app.registerExtension({
+    name: "KD_Nodes.PreviewAnimation",
+
+    async beforeRegisterNodeDef(nodeType, nodeData, app) {
+        if (nodeData?.name !== "PreviewAnimationKD") {
+            return;
+        }
+
+        // Reuse the Load Video preview widget + right-click options
+        addVideoPreview(nodeType);
+        addPreviewOptions(nodeType);
+
+        // On execution, point the preview at the mp4 the backend just wrote
+        chainCallback(nodeType.prototype, "onExecuted", function(message) {
+            const previews = message?.kd_video;
+            if (!previews || !previews.length) return;
+            const p = previews[0];
+            this.updateParameters({filename: p.filename, format: p.format || "video/mp4"}, true);
+        });
+    },
+});
+
+app.registerExtension({
     name: "KD_Nodes.LoadVideo",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {

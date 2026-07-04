@@ -1,4 +1,4 @@
-import os, json, re, torch, hashlib
+import os, json, re, torch, hashlib, subprocess
 
 import numpy as np
 from PIL import Image, ImageColor, ImageSequence, ImageOps
@@ -525,9 +525,7 @@ class PreviewAnimationKD:
         self.output_dir = folder_paths.get_temp_directory()
         self.type = "temp"
         self.prefix_append = "_temp_" + ''.join(random.choice("abcdefghijklmnopqrstupvxyz") for x in range(5))
-        self.compress_level = 1
 
-    methods = {"default": 4, "fastest": 0, "slowest": 6}
     @classmethod
     def INPUT_TYPES(s):
         return {"required":
@@ -547,57 +545,54 @@ class PreviewAnimationKD:
     OUTPUT_NODE = True
     CATEGORY = "KDNodes/image"
 
-    def preview(self, fps, images=None, masks=None, passthrough=None):
-        filename_prefix = "AnimPreview"
-        full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(filename_prefix, self.output_dir)
-        results = list()
-
-        pil_images = []
-
+    def _frames_uint8(self, images, masks):
+        """Build a contiguous (N, H, W, 3) uint8 array from images and/or masks."""
         if images is not None and masks is not None:
-            for image in images:
-                i = 255. * image.cpu().numpy()
-                img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
-                pil_images.append(img)
-            for mask in masks:
-                if pil_images:
-                    mask_np = mask.cpu().numpy()
-                    mask_np = np.clip(mask_np * 255, 0, 255).astype(np.uint8)
-                    mask_img = Image.fromarray(mask_np, mode='L')
-                    img = pil_images.pop(0)
-                    img = img.convert("RGBA")
-                    rgba_mask_img = Image.new("RGBA", img.size, (255, 255, 255, 255))
-                    rgba_mask_img.putalpha(mask_img)
-                    composited_img = Image.alpha_composite(img, rgba_mask_img)
-                    pil_images.append(composited_img)
+            imgs = np.clip(images.cpu().numpy() * 255.0, 0, 255)[..., :3]
+            m = np.clip(masks.cpu().numpy(), 0.0, 1.0)[..., None]
+            n = min(imgs.shape[0], m.shape[0])
+            frames = imgs[:n] * (1.0 - m[:n]) + 255.0 * m[:n]
+            return frames.astype(np.uint8)
+        elif images is not None:
+            return np.clip(images.cpu().numpy() * 255.0, 0, 255)[..., :3].astype(np.uint8)
+        elif masks is not None:
+            m = np.clip(masks.cpu().numpy() * 255.0, 0, 255).astype(np.uint8)
+            return np.repeat(m[..., None], 3, axis=-1)
+        return None
 
-        elif images is not None and masks is None:
-            for image in images:
-                i = 255. * image.cpu().numpy()
-                img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
-                pil_images.append(img)
+    def preview(self, fps, images=None, masks=None, passthrough=None):
+        from .load_video_kd import FFMPEG_PATH
 
-        elif masks is not None and images is None:
-            for mask in masks:
-                mask_np = 255. * mask.cpu().numpy()
-                mask_img = Image.fromarray(np.clip(mask_np, 0, 255).astype(np.uint8))
-                pil_images.append(mask_img)
-        else:
-            print("PreviewAnimation: No images or masks provided")
-            return {"ui": {"images": results, "animated": (None,), "text": "empty"}, "result": (passthrough,)}
+        frames = self._frames_uint8(images, masks)
+        if frames is None or frames.shape[0] == 0:
+            print("PreviewAnimationKD: No images or masks provided")
+            return {"ui": {"kd_video": []}, "result": (passthrough,)}
+        if FFMPEG_PATH is None:
+            print("PreviewAnimationKD: ffmpeg not found, cannot build preview")
+            return {"ui": {"kd_video": []}, "result": (passthrough,)}
 
-        num_frames = len(pil_images)
+        num_frames, H, W = frames.shape[0], frames.shape[1], frames.shape[2]
 
-        c = len(pil_images)
-        for i in range(0, c, num_frames):
-            file = f"{filename}_{counter:05}_.webp"
-            pil_images[i].save(os.path.join(full_output_folder, file), save_all=True, duration=int(1000.0/fps), append_images=pil_images[i + 1:i + num_frames], lossless=False, quality=50, method=0)
-            results.append({
-                "filename": file,
-                "subfolder": subfolder,
-                "type": self.type
-            })
-            counter += 1
+        full_output_folder, filename, counter, subfolder, filename_prefix = \
+            folder_paths.get_save_image_path("AnimPreview" + self.prefix_append, self.output_dir)
+        file = f"{filename}_{counter:05}_.mp4"
+        out_path = os.path.join(full_output_folder, file)
 
-        animated = num_frames != 1
-        return {"ui": {"images": results, "animated": (animated,), "text": [f"{num_frames}x{pil_images[0].size[0]}x{pil_images[0].size[1]}"]}, "result": (passthrough,)}
+        args = [
+            FFMPEG_PATH, "-v", "error", "-y",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-preset", "ultrafast", "-crf", "23",
+            "-movflags", "+faststart",
+            out_path,
+        ]
+        proc = subprocess.Popen(args, stdin=subprocess.PIPE)
+        proc.stdin.write(np.ascontiguousarray(frames).tobytes())
+        proc.stdin.close()
+        proc.wait()
+
+        preview = {"filename": out_path, "format": "video/mp4",
+                   "frames": num_frames, "fps": float(fps), "width": W, "height": H}
+        return {"ui": {"kd_video": [preview]}, "result": (passthrough,)}
