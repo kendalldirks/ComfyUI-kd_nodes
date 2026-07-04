@@ -178,9 +178,7 @@ class SAM3PointsToNativeCoords(io.ComfyNode):
             inputs=[
                 io.Custom("SAM3_POINTS_PROMPT").Input("positive_points", optional=True),
                 io.Custom("SAM3_POINTS_PROMPT").Input("negative_points", optional=True),
-                io.Image.Input("image", optional=True),
-                io.Int.Input("width", default=0, min=0, optional=True),
-                io.Int.Input("height", default=0, min=0, optional=True),
+                io.Image.Input("image"),
             ],
             outputs=[
                 io.String.Output(display_name="positive_coords"),
@@ -189,14 +187,8 @@ class SAM3PointsToNativeCoords(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, positive_points=None, negative_points=None,
-                image=None, width=0, height=0) -> io.NodeOutput:
-        if image is not None:
-            H, W = int(image.shape[1]), int(image.shape[2])
-        elif width > 0 and height > 0:
-            W, H = int(width), int(height)
-        else:
-            raise ValueError("SAM3PointsToNativeCoords: connect an image or set width/height.")
+    def execute(cls, image, positive_points=None, negative_points=None) -> io.NodeOutput:
+        H, W = int(image.shape[1]), int(image.shape[2])
 
         pos_out, neg_out = [], []
 
