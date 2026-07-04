@@ -34,6 +34,7 @@ NODE_CONFIG = {
     "Datatype": {"class": Datatype, "name": "Data Type"},
     "RaiseError": {"class": RaiseError, "name": "Raise Error"},
     "NoneConstant": {"class": NoneConstant, "name": "None Constant"},
+    "SAM3PointsToNativeCoords": {"class": SAM3PointsToNativeCoords, "name": "SAM3 Points -> Native Coords"},
 }
 
 def generate_node_mappings(node_config):

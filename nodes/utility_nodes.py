@@ -1,5 +1,6 @@
-import gc, torch.cuda, comfy.model_management
+import gc, json, torch.cuda, comfy.model_management
 from server import PromptServer
+from comfy_api.latest import io
 from .utils import AnyType
 
 any = AnyType("*")
@@ -161,4 +162,57 @@ class NoneConstant:
 
     def get_none(self):
         return (None,)
+
+class SAM3PointsToNativeCoords(io.ComfyNode):
+    """
+    Converts SAM3_POINTS_PROMPT (normalized 0-1 coords) into the JSON pixel-coord
+    strings expected by the native SAM3_Detect node's positive/negative_coords inputs.
+    """
+
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="SAM3PointsToNativeCoords",
+            display_name="SAM3 Points -> Native Coords",
+            category="KDNodes/utility",
+            inputs=[
+                io.Custom("SAM3_POINTS_PROMPT").Input("positive_points", optional=True),
+                io.Custom("SAM3_POINTS_PROMPT").Input("negative_points", optional=True),
+                io.Image.Input("image", optional=True),
+                io.Int.Input("width", default=0, min=0, optional=True),
+                io.Int.Input("height", default=0, min=0, optional=True),
+            ],
+            outputs=[
+                io.String.Output(display_name="positive_coords"),
+                io.String.Output(display_name="negative_coords"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, positive_points=None, negative_points=None,
+                image=None, width=0, height=0) -> io.NodeOutput:
+        if image is not None:
+            H, W = int(image.shape[1]), int(image.shape[2])
+        elif width > 0 and height > 0:
+            W, H = int(width), int(height)
+        else:
+            raise ValueError("SAM3PointsToNativeCoords: connect an image or set width/height.")
+
+        pos_out, neg_out = [], []
+
+        def _ingest(prompt):
+            if not prompt:
+                return
+            pts = prompt.get("points", []) or []
+            labels = prompt.get("labels", None)
+            if labels is None or len(labels) != len(pts):
+                labels = [1] * len(pts)
+            for pt, lab in zip(pts, labels):
+                d = {"x": int(round(float(pt[0]) * W)), "y": int(round(float(pt[1]) * H))}
+                (pos_out if int(lab) == 1 else neg_out).append(d)
+
+        _ingest(positive_points)
+        _ingest(negative_points)
+
+        return io.NodeOutput(json.dumps(pos_out), json.dumps(neg_out))
 
