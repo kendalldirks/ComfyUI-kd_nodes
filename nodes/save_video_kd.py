@@ -122,6 +122,20 @@ class SaveVideoKD:
         if images is None or (isinstance(images, torch.Tensor) and images.size(0) == 0):
             return ("",)
 
+        # --- normalize to 3-channel NHWC ---
+        # A MASK (N,H,W) or single/4-channel tensor fed into the IMAGE input would
+        # otherwise be piped as raw bytes against a hardcoded rgb24 layout, causing
+        # ffmpeg to pack multiple frames per canvas (the "tiled / sped-up" artifact).
+        if isinstance(images, torch.Tensor):
+            if images.dim() == 3:                 # (N,H,W) mask -> add channel axis
+                images = images.unsqueeze(-1)
+            if images.dim() == 4:
+                c = images.shape[-1]
+                if c == 1:                        # grayscale -> replicate to RGB
+                    images = images.repeat(1, 1, 1, 3)
+                elif c == 4:                      # RGBA -> drop alpha
+                    images = images[..., :3]
+
         num_frames = images.shape[0] if isinstance(images, torch.Tensor) else len(images)
 
         # ----- resolve output directory -----
