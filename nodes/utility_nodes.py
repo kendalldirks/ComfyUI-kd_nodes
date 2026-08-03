@@ -1,4 +1,4 @@
-import gc, json, torch.cuda, comfy.model_management
+import gc, json, os, torch.cuda, comfy.model_management
 from server import PromptServer
 from comfy_api.latest import io
 from .utils import AnyType
@@ -162,6 +162,38 @@ class NoneConstant:
 
     def get_none(self):
         return (None,)
+
+class SplitPath:
+    """
+    Splits a file path into its component parts.
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "path": ("STRING", {"default": "", "multiline": False}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("directory_path", "directory_name", "file_name", "basename")
+
+    CATEGORY = "KDNodes/utility"
+    FUNCTION = "process"
+
+    def process(self, path: str) -> tuple:
+        path = str(path).strip().strip('"').strip("'")
+        if not path:
+            return ("", "", "", "")
+        path = os.path.normpath(path)
+
+        directory_path = os.path.dirname(path)
+        directory_name = os.path.basename(directory_path)
+        basename = os.path.basename(path)
+        file_name = os.path.splitext(basename)[0]
+
+        return (directory_path, directory_name, file_name, basename)
 
 class SAM3PointsToNativeCoords(io.ComfyNode):
     """

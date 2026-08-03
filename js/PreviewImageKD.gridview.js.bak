@@ -1,0 +1,381 @@
+import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
+
+// Preview + Copy/Save buttons for PreviewImageKD.
+//
+// The image is rendered here as a DOM widget rather than left to ComfyUI's
+// built-in preview, because the built-in one is painted straight onto the
+// LiteGraph canvas in the space *after* every widget — it isn't a widget, so it
+// can't be reordered, and the path field and buttons are wanted underneath it.
+// Re-added here: the dimension caption, a thumbnail grid for batches, and
+// click-to-fullscreen. Not re-added: Open in MaskEditor, which needs the native
+// node.imgs structure this node deliberately suppresses.
+//
+// Save exists because the clipboard can't carry the workflow: browsers decode
+// and re-encode images written through the Async Clipboard API, which strips
+// the PNG text chunks. Downloading the original file keeps prompt and workflow
+// intact, so the saved image can be dragged back into ComfyUI.
+
+// Match the canvas-drawn node text rather than the surrounding page font --
+// LiteGraph draws with these, so reading them keeps the caption consistent.
+const LG = globalThis.LiteGraph || {};
+const NODE_FONT = LG.NODE_FONT || "Arial";
+const CAP_SIZE = LG.NODE_SUBTEXT_SIZE || 12;
+const CAP_COLOR = LG.NODE_TEXT_COLOR || "#AAA";
+
+const BTN_CSS =
+    "flex:1 1 0;min-width:0;padding:5px 0;cursor:pointer;" +
+    "border:1px solid #555;background:#333;color:#ddd;" +
+    "border-radius:4px;font-size:12px;";
+
+const CAPTION_H = CAP_SIZE + 6;
+const ROW_H = 32;
+const CELL_MIN = 88;      // smallest thumbnail before the grid drops a column
+const GAP = 4;
+
+function makeButton(label, css) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.style.cssText = css;
+    return b;
+}
+
+// Momentary label change rather than an alert, so a failure doesn't interrupt.
+function flash(btn, text, ms = 1400) {
+    const original = btn.dataset.label || btn.textContent;
+    btn.dataset.label = original;
+    btn.textContent = text;
+    clearTimeout(btn._flashTimer);
+    btn._flashTimer = setTimeout(() => { btn.textContent = original; }, ms);
+}
+
+async function downloadInBrowser(src, filename) {
+    // Fetching the original bytes and handing them to a download link keeps the
+    // file byte-identical — metadata and all.
+    const resp = await fetch(src);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const url = URL.createObjectURL(await resp.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || "preview.png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function toPngBlob(blob) {
+    if (blob.type === "image/png") return blob;
+    const bitmap = await createImageBitmap(blob);
+    const canvas = Object.assign(document.createElement("canvas"), {
+        width: bitmap.width,
+        height: bitmap.height,
+    });
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
+// Fullscreen overlay. Appended to document.body rather than the node, so it
+// escapes the canvas entirely; keydown is captured so ComfyUI's own shortcuts
+// (delete, copy, …) don't fire behind it.
+function openLightbox(shots, start) {
+    if (!shots.length) return;
+    let i = start;
+
+    const overlay = document.createElement("div");
+    overlay.style.cssText =
+        "position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.88);" +
+        "display:flex;align-items:center;justify-content:center;cursor:zoom-out;";
+
+    const big = document.createElement("img");
+    big.style.cssText = "max-width:94vw;max-height:94vh;display:block;";
+
+    const nav = (label, dx) => {
+        const b = makeButton(label,
+            "position:absolute;top:50%;transform:translateY(-50%);" +
+            "border:none;background:rgba(0,0,0,.4);color:#fff;font-size:30px;" +
+            "line-height:1;padding:12px 18px;cursor:pointer;border-radius:6px;");
+        b.style[dx < 0 ? "left" : "right"] = "24px";
+        b.addEventListener("click", (e) => { e.stopPropagation(); step(dx); });
+        return b;
+    };
+
+    const counter = document.createElement("div");
+    counter.style.cssText =
+        "position:absolute;bottom:20px;left:0;right:0;text-align:center;" +
+        `color:#ddd;font-family:${NODE_FONT};font-size:13px;`;
+
+    function render() {
+        big.src = shots[i].url;
+        counter.textContent = shots.length > 1 ? `${i + 1} / ${shots.length}` : "";
+    }
+    function step(dx) {
+        i = (i + dx + shots.length) % shots.length;
+        render();
+    }
+    function close() {
+        document.removeEventListener("keydown", onKey, true);
+        overlay.remove();
+    }
+    function onKey(e) {
+        if (e.key === "Escape") close();
+        else if (e.key === "ArrowRight") step(1);
+        else if (e.key === "ArrowLeft") step(-1);
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    overlay.appendChild(big);
+    if (shots.length > 1) overlay.append(nav("‹", -1), nav("›", 1), counter);
+    overlay.addEventListener("click", close);
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(overlay);
+    render();
+}
+
+app.registerExtension({
+    name: "Comfy.PreviewImageKD",
+
+    async nodeCreated(node) {
+        if (node.comfyClass !== "PreviewImageKD") return;
+
+        // Suppress ComfyUI's own preview permanently. Clearing node.imgs inside
+        // onExecuted isn't enough: the core loads preview images asynchronously
+        // and assigns node.imgs *after* onExecuted returns, so the clear gets
+        // overwritten and both copies end up drawn.
+        Object.defineProperty(node, "imgs", {
+            get() { return []; },
+            set() { /* swallowed — this node draws its own */ },
+            configurable: true,
+        });
+
+        let shots = [];     // [{url, filename, subfolder, type, w, h}]
+        let index = 0;      // which image Copy/Save act on
+        let aspect = 1;
+
+        // --- preview area --------------------------------------------------
+        const stage = document.createElement("div");
+        stage.style.cssText = "width:100%;box-sizing:border-box;";
+
+        const caption = document.createElement("div");
+        caption.style.cssText =
+            "flex:0 0 auto;text-align:center;user-select:none;" +
+            `height:${CAPTION_H}px;line-height:${CAPTION_H}px;` +
+            `font-family:${NODE_FONT};font-size:${CAP_SIZE}px;color:${CAP_COLOR};`;
+
+        const wrap = document.createElement("div");
+        wrap.style.cssText =
+            "display:flex;flex-direction:column;gap:2px;width:100%;" +
+            "box-sizing:border-box;padding:2px 0;";
+        wrap.append(stage, caption);
+
+        function gridMetrics() {
+            const w = Math.max(64, node.size[0] - 20);
+            const cols = Math.max(1, Math.floor((w + GAP) / (CELL_MIN + GAP)));
+            const cell = (w - GAP * (cols - 1)) / cols;
+            const rows = Math.ceil(shots.length / cols);
+            return Math.round(rows * cell + (rows - 1) * GAP);
+        }
+
+        const stageHeight = () => {
+            const w = Math.max(64, node.size[0] - 20);
+            if (shots.length > 1) return gridMetrics();
+            return Math.round(w / aspect);
+        };
+        const widgetHeight = () => stageHeight() + CAPTION_H + 8;
+
+        const imgWidget = node.addDOMWidget("kd_pi_image", "div", wrap, {
+            serialize: false,
+            getMinHeight: widgetHeight,
+        });
+        imgWidget.computeSize = () => [0, widgetHeight()];
+
+        function refit() {
+            const need = node.computeSize()[1];
+            if (node.size[1] < need) node.setSize([node.size[0], need]);
+            node.graph?.setDirtyCanvas(true);
+        }
+
+        function updateCaption() {
+            const s = shots[index];
+            const dims = s?.w ? `${s.w} × ${s.h}` : "";
+            caption.textContent =
+                shots.length > 1 ? `${shots.length} images${dims ? "   " + dims : ""}` : dims;
+        }
+
+        function render() {
+            stage.replaceChildren();
+            if (!shots.length) {
+                stage.style.cssText = "width:100%;box-sizing:border-box;";
+                updateCaption();
+                return;
+            }
+
+            if (shots.length === 1) {
+                stage.style.cssText =
+                    "width:100%;box-sizing:border-box;display:flex;" +
+                    "align-items:center;justify-content:center;overflow:hidden;";
+                const img = document.createElement("img");
+                img.src = shots[0].url;
+                img.draggable = false;
+                img.style.cssText =
+                    "width:100%;height:auto;display:block;border-radius:4px;cursor:zoom-in;";
+                img.addEventListener("load", () => {
+                    shots[0].w = img.naturalWidth;
+                    shots[0].h = img.naturalHeight;
+                    if (img.naturalWidth && img.naturalHeight) {
+                        aspect = img.naturalWidth / img.naturalHeight;
+                        img.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
+                    }
+                    updateCaption();
+                    refit();
+                });
+                img.addEventListener("click", () => openLightbox(shots, 0));
+                stage.appendChild(img);
+                return;
+            }
+
+            // Batch: a thumbnail grid, mirroring what the native preview does.
+            stage.style.cssText =
+                "width:100%;box-sizing:border-box;display:grid;" +
+                `grid-template-columns:repeat(auto-fill,minmax(${CELL_MIN}px,1fr));` +
+                `gap:${GAP}px;`;
+            shots.forEach((s, i) => {
+                const th = document.createElement("img");
+                th.src = s.url;
+                th.draggable = false;
+                th.style.cssText =
+                    "width:100%;aspect-ratio:1;object-fit:contain;display:block;" +
+                    "background:#222;border-radius:4px;cursor:zoom-in;" +
+                    (i === index ? "outline:2px solid #6cf;outline-offset:-2px;" : "");
+                th.addEventListener("load", () => {
+                    s.w = th.naturalWidth;
+                    s.h = th.naturalHeight;
+                    if (i === index) updateCaption();
+                });
+                th.addEventListener("click", () => {
+                    index = i;              // Copy/Save follow the last one clicked
+                    render();
+                    openLightbox(shots, i);
+                });
+                stage.appendChild(th);
+            });
+            updateCaption();
+            refit();
+        }
+
+        // --- buttons -------------------------------------------------------
+        const copyBtn = makeButton("Copy to Clipboard", BTN_CSS);
+        const saveBtn = makeButton("Save", BTN_CSS);
+
+        const row = document.createElement("div");
+        row.style.cssText =
+            "display:flex;gap:6px;width:100%;align-items:center;" +
+            "box-sizing:border-box;padding:2px 0;";
+        row.append(copyBtn, saveBtn);
+
+        // A DOM widget, not two addWidget("button") calls — a LiteGraph button
+        // always takes a full row to itself.
+        const btnWidget = node.addDOMWidget("kd_pi_buttons", "div", row, {
+            serialize: false,
+            getMinHeight: () => ROW_H,
+        });
+        btnWidget.computeSize = () => [0, ROW_H];
+
+        // Order: image, then the `path` field, then the buttons.
+        const pathWidget = node.widgets?.find((w) => w.name === "path");
+        const rest = node.widgets.filter(
+            (w) => w !== imgWidget && w !== btnWidget && w !== pathWidget);
+        node.widgets.length = 0;
+        node.widgets.push(imgWidget, ...rest);
+        if (pathWidget) node.widgets.push(pathWidget);
+        node.widgets.push(btnWidget);
+
+        render();
+
+        // --- execution -----------------------------------------------------
+        const origOnExecuted = node.onExecuted;
+        node.onExecuted = function (message) {
+            origOnExecuted?.apply(this, arguments);
+            shots = (message?.images || []).map((p) => ({
+                filename: p.filename,
+                subfolder: p.subfolder || "",
+                type: p.type || "temp",
+                url: api.apiURL("/view?" + new URLSearchParams({
+                    filename: p.filename,
+                    subfolder: p.subfolder || "",
+                    type: p.type || "temp",
+                    t: Date.now(),
+                })),
+            }));
+            index = 0;
+            render();
+        };
+
+        // --- actions -------------------------------------------------------
+        const current = () => shots[index] || null;
+
+        copyBtn.addEventListener("click", async () => {
+            const s = current();
+            if (!s) return flash(copyBtn, "Run the workflow first");
+            try {
+                const resp = await fetch(s.url);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const png = await toPngBlob(await resp.blob());
+                await navigator.clipboard.write([
+                    new ClipboardItem({ "image/png": png }),
+                ]);
+                flash(copyBtn, "Copied");
+            } catch (err) {
+                console.error("[PreviewImageKD] copy failed:", err);
+                flash(copyBtn, "Copy failed");
+            }
+        });
+
+        saveBtn.addEventListener("click", async () => {
+            const s = current();
+            if (!s) return flash(saveBtn, "Run the workflow first");
+
+            const dest = (pathWidget?.value || "").trim();
+
+            // Given a path, try to write it server-side. Any failure — blank,
+            // unwritable, wrong drive — quietly becomes a browser download.
+            if (dest) {
+                try {
+                    const resp = await api.fetchApi("/kd_nodes/save_preview", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            filename: s.filename,
+                            subfolder: s.subfolder,
+                            type: s.type,
+                            path: dest,
+                        }),
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        console.log("[PreviewImageKD] saved to", data.saved);
+                        return flash(saveBtn, "Saved");
+                    }
+                    const detail = await resp.json().catch(() => ({}));
+                    console.warn("[PreviewImageKD] path unusable, downloading instead:",
+                                 detail.error);
+                } catch (err) {
+                    console.warn("[PreviewImageKD] save route failed, downloading instead:",
+                                 err);
+                }
+            }
+
+            try {
+                await downloadInBrowser(s.url, s.filename);
+                flash(saveBtn, dest ? "Downloaded" : "Saved");
+            } catch (err) {
+                console.error("[PreviewImageKD] download failed:", err);
+                flash(saveBtn, "Save failed");
+            }
+        });
+
+        node.size[0] = Math.max(node.size[0], 300);
+    },
+});

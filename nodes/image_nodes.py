@@ -1,9 +1,12 @@
-import os, json, re, torch, hashlib, subprocess
+import os, json, re, torch, hashlib, subprocess, time, shutil
 
 import numpy as np
 from PIL import Image, ImageColor, ImageSequence, ImageOps
 from PIL.PngImagePlugin import PngInfo
 import torchvision.transforms.functional as TF
+
+from aiohttp import web
+from server import PromptServer
 
 from comfy.cli_args import args
 import folder_paths
@@ -11,6 +14,8 @@ import node_helpers
 
 from nodes import SaveImage
 import random
+
+from .utils import frames_to_uint8
 
 
 
@@ -38,47 +43,6 @@ def tensor2rgb(t: torch.Tensor) -> torch.Tensor:
     else:
         return t
 
-def tensor2batch(t: torch.Tensor, bs: torch.Size) -> torch.Tensor:
-    if len(t.size()) < len(bs):
-        t = t.unsqueeze(3)
-    if t.size()[0] < bs[0]:
-        t.repeat(bs[0], 1, 1, 1)
-    dim = bs[3]
-    if dim == 1:
-        return tensor2mask(t)
-    elif dim == 3:
-        return tensor2rgb(t)
-    elif dim == 4:
-        return tensor2rgba(t)
-
-def tensors2common(t1: torch.Tensor, t2: torch.Tensor) -> (torch.Tensor, torch.Tensor):
-    t1s = t1.size()
-    t2s = t2.size()
-    if len(t1s) < len(t2s):
-        t1 = t1.unsqueeze(3)
-    elif len(t1s) > len(t2s):
-        t2 = t2.unsqueeze(3)
-
-    if len(t1.size()) == 3:
-        if t1s[0] < t2s[0]:
-            t1 = t1.repeat(t2s[0], 1, 1)
-        elif t1s[0] > t2s[0]:
-            t2 = t2.repeat(t1s[0], 1, 1)
-    else:
-        if t1s[0] < t2s[0]:
-            t1 = t1.repeat(t2s[0], 1, 1, 1)
-        elif t1s[0] > t2s[0]:
-            t2 = t2.repeat(t1s[0], 1, 1, 1)
-
-    t1s = t1.size()
-    t2s = t2.size()
-    if len(t1s) > 3 and t1s[3] < t2s[3]:
-        return tensor2batch(t1, t2s), t2
-    elif len(t1s) > 3 and t1s[3] > t2s[3]:
-        return t1, tensor2batch(t2, t1s)
-    else:
-        return t1, t2
-
 
 class MattePreview:
     def __init__(self):
@@ -104,19 +68,43 @@ class MattePreview:
 
     def mix(self, image, color, opacity, invert, mask):
         r, g, b = ImageColor.getrgb(color)
-        r, g, b = r / 255., g / 255., b / 255.
-        image_size = image.size()
-        image2 = torch.tensor([r, g, b]).to(device=image.device).unsqueeze(0).unsqueeze(0).unsqueeze(0).repeat(image_size[0], image_size[1], image_size[2], 1)
-        image, image2 = tensors2common(image, image2)
-        mask.reshape((-1, 1, mask.shape[-2], mask.shape[-1])).movedim(1, -1).expand(-1, -1, -1, 3)
-        mask = tensor2batch(tensor2mask(mask), image.size())
 
-        if invert:
-            mask = 1.0 - mask
+        # Built straight onto the image's device and dtype.  Creating it on the
+        # CPU in float32 and moving afterwards would silently promote a
+        # half-precision image to float32 for the entire blend.
+        rgb = torch.tensor([r / 255.0, g / 255.0, b / 255.0],
+                           device=image.device, dtype=image.dtype)
 
-        mask = (mask * float(opacity)).clamp(0.0, 1.0)
+        m = tensor2mask(mask)
+        if tuple(m.shape[-2:]) != tuple(image.shape[1:3]):
+            raise ValueError(
+                f"MattePreview: mask is {tuple(m.shape[-2:])} but the image is "
+                f"{tuple(image.shape[1:3])}; they have to match.")
 
-        return (image * (1. - mask) + image2 * mask,)
+        # opacity and the optional invert folded into one multiply-add:
+        #   invert off -> m * opacity
+        #   invert on  -> (1 - m) * opacity  ==  m * -opacity + opacity
+        # mul() hands back a buffer we own, so add_ and clamp_ can then run in
+        # place without reaching into the caller's mask.
+        opacity = float(opacity)
+        scale = -opacity if invert else opacity
+        bias = opacity if invert else 0.0
+        m = m.to(device=image.device, dtype=image.dtype).unsqueeze(-1)
+        m = m.mul(scale).add_(bias).clamp_(0.0, 1.0)
+
+        # lerp(a, b, w) == a + w * (b - a), which is the same result as
+        # a * (1 - w) + b * w but in one fused kernel writing one buffer
+        # instead of four.  `rgb` broadcasts from (3,) and `m` from (..., 1),
+        # so neither the colour nor the mask is ever materialised at full size
+        # -- the old version allocated a complete image-sized copy of each.
+        out = torch.lerp(image[..., :3], rgb, m)
+
+        # An alpha channel rides along untouched instead of crashing: the old
+        # path routed RGBA into tensor2rgba(), which does not exist.
+        if image.shape[-1] > 3:
+            out = torch.cat((out, image[..., 3:]), dim=-1)
+
+        return (out,)
 
 class ImageRebatchOverlap:
     @classmethod
@@ -501,6 +489,74 @@ class LoadImagesPathKD:
         return validate_load_images(strip_path(directory))
 
 
+# --- PreviewImageKD's Save button -------------------------------------------
+#
+# The preview PNG on disk already carries the prompt and workflow in its text
+# chunks, but the clipboard cannot carry them out: browsers decode and re-encode
+# images written through the Async Clipboard API, which strips the metadata.
+# Copying the file instead keeps it intact.
+
+@PromptServer.instance.routes.post("/kd_nodes/save_preview")
+async def _kd_save_preview(request):
+    """
+    Copy a preview image out of ComfyUI's temp area to a path the user typed
+    into the node.  The frontend falls back to an ordinary browser download
+    whenever this fails, so an unusable path just means "download instead"
+    rather than being an error worth surfacing loudly.
+    """
+    from .save_video_kd import get_versioned_filename
+
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "malformed request"}, status=400)
+
+    filename = os.path.basename(data.get("filename") or "")
+    subfolder = data.get("subfolder") or ""
+    ftype = data.get("type") or "temp"
+    dest = (data.get("path") or "").strip().strip('"')
+
+    if not filename or not dest:
+        return web.json_response({"error": "no filename or path"}, status=400)
+
+    # Resolve the source inside ComfyUI's own directories, refusing anything
+    # that tries to climb out of them via the subfolder.
+    base = folder_paths.get_directory_by_type(ftype)
+    if not base:
+        return web.json_response({"error": f"unknown type '{ftype}'"}, status=400)
+    base = os.path.abspath(base)
+    src_dir = os.path.abspath(os.path.join(base, subfolder))
+    try:
+        contained = os.path.commonpath([base, src_dir]) == base
+    except ValueError:                       # different drives on Windows
+        contained = False
+    if not contained:
+        return web.json_response({"error": "invalid subfolder"}, status=400)
+
+    src = os.path.join(src_dir, filename)
+    if not os.path.isfile(src):
+        return web.json_response({"error": "source image not found"}, status=404)
+
+    # A folder or a full file path are both accepted; anything without an
+    # extension is treated as a folder.
+    dest = os.path.expanduser(os.path.expandvars(dest))
+    if os.path.isdir(dest) or not os.path.splitext(dest)[1]:
+        out_dir, out_name = dest, filename
+    else:
+        out_dir, out_name = os.path.dirname(dest) or ".", os.path.basename(dest)
+
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        stem, ext = os.path.splitext(out_name)
+        target = os.path.join(
+            out_dir, get_versioned_filename(out_dir, stem, ext.lstrip(".") or "png"))
+        shutil.copy2(src, target)          # copy2, so the file arrives byte-identical
+    except (OSError, ValueError) as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+    return web.json_response({"saved": target})
+
+
 class PreviewImageKD(SaveImage):
     def __init__(self):
         self.output_dir = folder_paths.get_temp_directory()
@@ -512,13 +568,45 @@ class PreviewImageKD(SaveImage):
     def INPUT_TYPES(s):
         return {
             "required": {"images": ("IMAGE",)},
+            "optional": {
+                "save_path": ("STRING", {"default": "", "multiline": False,
+                                         "tooltip": "Folder, or a full file path, for the Save "
+                                                    "button. Leave blank — or give a path that "
+                                                    "can't be written — to fall back to a normal "
+                                                    "browser download."}),
+            },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
-    RETURN_TYPES = ()
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
     FUNCTION = "save_images"
     OUTPUT_NODE = True
     CATEGORY = "KDNodes/image"
+
+    def save_images(self, images, save_path="", prompt=None, extra_pnginfo=None):
+        # `save_path` is read by the Save button in the frontend; there is
+        # nothing to do with it at execution time. Declared here so ComfyUI
+        # serialises it, and so SaveImage.save_images is not handed an
+        # argument it cannot take.
+        out = super().save_images(images, "ComfyUI", prompt, extra_pnginfo)
+
+        # SaveImage returns just {"ui": {...}}. Adding "result" turns this into
+        # a passthrough as well as a preview: the tensor goes straight back out
+        # untouched, so chaining it mid-graph costs nothing but the preview it
+        # was already writing. OUTPUT_NODE stays True so it still runs with
+        # nothing connected downstream.
+        out["result"] = (images,)
+        return out
+
+# Set True to print per-stage timings for PreviewAnimationKD to the console.
+PREVIEW_PROFILE = False
+
+
+def _preview_log(name, seconds, nbytes=None):
+    detail = f"{nbytes / 1e6:9.1f} MB" if nbytes else ""
+    print(f"[PreviewAnimationKD] {name:<30} {seconds:7.3f}s  {detail}")
+
 
 class PreviewAnimationKD:
     def __init__(self):
@@ -530,16 +618,17 @@ class PreviewAnimationKD:
     def INPUT_TYPES(s):
         return {"required":
                     {
-                     "fps": ("FLOAT", {"default": 8.0, "min": 0.01, "max": 1000.0, "step": 0.01}),
+                     "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 1000.0, "step": 0.01}),
                      "crf": ("INT", {"default": 18, "min": 0, "max": 51,
                                      "tooltip": "H.264 quality: lower = better/larger. "
                                                 "0 = lossless, ~18 visually lossless, 23 = default."}),
                      "preset": (["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"],
                                 {"default": "veryfast"}),
-                     "max_preview_width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 8,
-                                                   "tooltip": "Downscale the preview so its width doesn't "
-                                                              "exceed this (keeps aspect ratio, never upscales). "
-                                                              "0 = full resolution."}),
+                     "max_preview_size": ("INT", {"default": 1024, "min": 0, "max": 8192, "step": 8,
+                                                   "tooltip": "Downscale the preview so its longest edge "
+                                                              "doesn't exceed this (keeps aspect ratio, never upscales). "
+                                                              "0 = full resolution, which is much slower: a "
+                                                              "289-frame 4K batch takes ~15s at 0 vs ~2s at 1024."}),
                      },
                 "optional": {
                     "images": ("IMAGE", ),
@@ -552,27 +641,30 @@ class PreviewAnimationKD:
     RETURN_NAMES = ("passthrough",)
     FUNCTION = "preview"
     OUTPUT_NODE = True
-    CATEGORY = "KDNodes/image"
+    CATEGORY = "KDNodes/video"
 
-    def _frames_uint8(self, images, masks):
-        """Build a contiguous (N, H, W, 3) uint8 array from images and/or masks."""
-        if images is not None and masks is not None:
-            imgs = np.clip(images.cpu().numpy() * 255.0, 0, 255)[..., :3]
-            m = np.clip(masks.cpu().numpy(), 0.0, 1.0)[..., None]
-            n = min(imgs.shape[0], m.shape[0])
-            frames = imgs[:n] * (1.0 - m[:n]) + 255.0 * m[:n]
-            return frames.astype(np.uint8)
-        elif images is not None:
-            return np.clip(images.cpu().numpy() * 255.0, 0, 255)[..., :3].astype(np.uint8)
-        elif masks is not None:
-            m = np.clip(masks.cpu().numpy() * 255.0, 0, 255).astype(np.uint8)
-            return np.repeat(m[..., None], 3, axis=-1)
-        return None
-
-    def preview(self, fps, crf, preset, max_preview_width=0, images=None, masks=None, passthrough=None):
+    def preview(self, fps, crf, preset, max_preview_size=0, images=None, masks=None, passthrough=None):
         from .load_video_kd import FFMPEG_PATH
 
-        frames = self._frames_uint8(images, masks)
+        t_total = time.perf_counter()
+        if PREVIEW_PROFILE:
+            src = images if images is not None else masks
+            if src is not None:
+                print(f"[PreviewAnimationKD] input {tuple(src.shape)} = "
+                      f"{src.numel() * src.element_size() / 1e6:.0f} MB, "
+                      f"max_preview_size={max_preview_size}")
+            t = time.perf_counter()
+
+        # Downscales and converts in chunks, and hands back frames already at
+        # their final even dimensions so ffmpeg needs no scale/pad filter.
+        frames = frames_to_uint8(images, masks, target_size=max_preview_size)
+
+        if PREVIEW_PROFILE and frames is not None:
+            _preview_log("resize + uint8 (chunked)", time.perf_counter() - t,
+                         frames.nbytes)
+            print(f"[PreviewAnimationKD]   -> {frames.shape[2]}x{frames.shape[1]}"
+                  f" x {frames.shape[0]} frames")
+
         if frames is None or frames.shape[0] == 0:
             print("PreviewAnimationKD: No images or masks provided")
             return {"ui": {"kd_video": []}, "result": (passthrough,)}
@@ -587,25 +679,32 @@ class PreviewAnimationKD:
         file = f"{filename}_{counter:05}_.mp4"
         out_path = os.path.join(full_output_folder, file)
 
-        # Optional downscale (never upscale), then force even dimensions for yuv420p.
-        vf = []
-        if max_preview_width > 0:
-            vf.append(f"scale='min(iw,{int(max_preview_width)})':-2")
-        vf.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
-
         args = [
             FFMPEG_PATH, "-v", "error", "-y",
             "-f", "rawvideo", "-pix_fmt", "rgb24",
             "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
-            "-vf", ",".join(vf),
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
             "-preset", str(preset), "-crf", str(crf),
             "-movflags", "+faststart", out_path,
         ]
+        if PREVIEW_PROFILE:
+            t = time.perf_counter()
         proc = subprocess.Popen(args, stdin=subprocess.PIPE)
-        proc.stdin.write(np.ascontiguousarray(frames).tobytes())
+        # Contiguous already, so hand ffmpeg the buffer rather than paying for
+        # a full tobytes() duplicate.
+        proc.stdin.write(frames.reshape(-1).data)
         proc.stdin.close()
+        if PREVIEW_PROFILE:
+            # Writing to a pipe blocks whenever ffmpeg can't keep up, so this
+            # figure includes ffmpeg's encoding work, not just the copy.
+            _preview_log("pipe write to ffmpeg", time.perf_counter() - t,
+                         frames.nbytes)
+            t = time.perf_counter()
         proc.wait()
+        if PREVIEW_PROFILE:
+            _preview_log("ffmpeg drain/finish", time.perf_counter() - t)
+            _preview_log("TOTAL preview build", time.perf_counter() - t_total,
+                         os.path.getsize(out_path) if os.path.isfile(out_path) else 0)
 
         # Served through ComfyUI's native /view route (no re-transcode) for full quality.
         preview = {"filename": file, "subfolder": subfolder, "type": self.type,

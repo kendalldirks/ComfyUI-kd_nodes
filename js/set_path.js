@@ -1,4 +1,6 @@
 import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
+import { makeButton, addButtonRow } from "./kd_ui.js";
 
 function insertGapAfter(node, widgetName, height = 8) {
     const idx = node.widgets?.findIndex(w => w.name === widgetName);
@@ -25,13 +27,14 @@ app.registerExtension({
 
             let isBrowsing = false;
 
-            this.addWidget("button", "Browse", null, async () => {
+            const browseBtn = makeButton("Browse");
+            browseBtn.addEventListener("click", async () => {
                 if (isBrowsing) return;
                 isBrowsing = true;
                 const pathWidget = this.widgets.find(w => w.name === "path");
 
                 try {
-                    const res = await fetch("/set_path/open");
+                    const res = await api.fetchApi("/set_path/open");
                     const data = await res.json();
 
                     if (!res.ok) {
@@ -50,7 +53,8 @@ app.registerExtension({
                 }
             });
 
-            insertGapAfter(this, "Browse", 4);
+            addButtonRow(this, "kd_setpath_browse", [browseBtn]);
+            insertGapAfter(this, "kd_setpath_browse", 4);
 
             const pathWidget = this.widgets.find(w => w.name === "path");
             if (pathWidget) {

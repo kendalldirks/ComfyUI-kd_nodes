@@ -1,5 +1,6 @@
 import { app } from '../../../scripts/app.js'
 import { api } from '../../../scripts/api.js'
+import { makeButton, addButtonRow } from './kd_ui.js'
 
 function chainCallback(object, property, callback) {
     if (object == undefined) {
@@ -168,14 +169,15 @@ function addBrowseWidget(nodeType, widgetName) {
         const pathWidget = this.widgets.find((w) => w.name === widgetName);
         let isBrowsing = false;
 
-        let browseWidget = this.addWidget("button", "Browse", null, async () => {
+        const browseBtn = makeButton("Browse");
+        browseBtn.addEventListener("click", async () => {
             if (isBrowsing) return;
             isBrowsing = true;
             app.canvas.node_widget = null;
             try {
                 const currentPath = pathWidget?.value || "";
-                const params = new URLSearchParams({path: currentPath});
-                const res = await fetch("/kd_nodes/open_video?" + params);
+                const res = await api.fetchApi(
+                    "/kd_nodes/open_video?" + new URLSearchParams({path: currentPath}));
                 const data = await res.json();
 
                 if (!res.ok) {
@@ -185,9 +187,7 @@ function addBrowseWidget(nodeType, widgetName) {
 
                 if (data.path && pathWidget) {
                     pathWidget.value = data.path;
-                    if (pathWidget.callback) {
-                        pathWidget.callback(data.path);
-                    }
+                    pathWidget.callback?.(data.path);
                     app.graph.setDirtyCanvas(true);
                 }
             } catch (err) {
@@ -196,16 +196,17 @@ function addBrowseWidget(nodeType, widgetName) {
                 isBrowsing = false;
             }
         });
-        browseWidget.options.serialize = false;
 
-        // Move browse button to just before the video preview widget
+        const browseWidget = addButtonRow(this, "kd_browse", [browseBtn]);
+
+        // Sit just above the video preview rather than after it.
         setTimeout(() => {
-            const browseIdx = this.widgets.findIndex((w) => w.name === "Browse");
+            const browseIdx = this.widgets.indexOf(browseWidget);
             const previewIdx = this.widgets.findIndex((w) => w.name === "videopreview");
             if (browseIdx > -1 && previewIdx > -1 && browseIdx > previewIdx) {
-                const [btn] = this.widgets.splice(browseIdx, 1);
+                this.widgets.splice(browseIdx, 1);
                 const newPreviewIdx = this.widgets.findIndex((w) => w.name === "videopreview");
-                this.widgets.splice(newPreviewIdx, 0, btn);
+                this.widgets.splice(newPreviewIdx, 0, browseWidget);
             }
             this.setSize([this.size[0], this.computeSize([this.size[0], this.size[1]])[1]]);
             app.graph.setDirtyCanvas(true);
@@ -257,14 +258,21 @@ function addPreviewOptions(nodeType) {
 
 // --- PreviewAnimationKD: resizable video preview served via the native /view route ---
 
-// Inject once: keep the video clipped to the node body so it can't spill past the edges.
+// Inject once: keep the video clipped to the node body so it can't spill past
+// the edges. Shared by LoadVideoKD and PreviewAnimationKD — both give their
+// wrapper the .kd_video_preview class.
+//
+// The radius sits on the media itself rather than the wrapper. Both previews
+// set width:100% with the height left to the intrinsic aspect ratio, so the
+// element box is exactly the picture and the corners land on the video.
 (function ensureKdPreviewStyle() {
     if (document.getElementById("kd_video_preview_style")) return;
     const style = document.createElement("style");
     style.id = "kd_video_preview_style";
     style.textContent =
         ".kd_video_preview{overflow:hidden;position:relative;width:100%;}" +
-        ".kd_video_preview video{display:block;width:100%;}";
+        ".kd_video_preview video,.kd_video_preview img" +
+        "{display:block;width:100%;border-radius:4px;}";
     document.head.appendChild(style);
 })();
 

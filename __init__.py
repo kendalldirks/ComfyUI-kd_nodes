@@ -9,6 +9,7 @@ from .nodes.load_image_kd import *
 from .nodes.datatype import *
 from .nodes.load_video_kd import *
 from .nodes.save_video_kd import *
+from .nodes.extract_frame_kd import *
 
 NODE_CONFIG = {
     #image nodes
@@ -24,6 +25,7 @@ NODE_CONFIG = {
     #video nodes
     "LoadVideoKD": {"class": LoadVideoKD, "name": "Load Video KD"},
     "SaveVideoKD": {"class": SaveVideoKD, "name": "Save Video KD"},
+    "ExtractFrameKD": {"class": ExtractFrameKD, "name": "Extract Frame"},
 
     #utility nodes
     "ItemFromListString": {"class": ItemFromListString, "name": "Item From List (String)"},
@@ -34,6 +36,7 @@ NODE_CONFIG = {
     "Datatype": {"class": Datatype, "name": "Data Type"},
     "RaiseError": {"class": RaiseError, "name": "Raise Error"},
     "NoneConstant": {"class": NoneConstant, "name": "None Constant"},
+    "SplitPath": {"class": SplitPath, "name": "Split Path"},
     "SAM3PointsToNativeCoords": {"class": SAM3PointsToNativeCoords, "name": "SAM3 Points -> Native Coords"},
 }
 

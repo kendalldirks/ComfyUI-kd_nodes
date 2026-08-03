@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 
-function insertGapAfter(node, widgetName) {
+export function insertGapAfter(node, widgetName) {
     const idx = node.widgets?.findIndex(w => w.name === widgetName);
     if (idx == null || idx === -1) return;
     node.widgets.splice(idx + 1, 0, {

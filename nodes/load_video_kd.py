@@ -498,7 +498,7 @@ class LoadVideoKD:
             },
         }
 
-    CATEGORY = "KD_Nodes/Video"
+    CATEGORY = "KDNodes/video"
 
     RETURN_TYPES = ("IMAGE", "INT", "AUDIO", "FLOAT", "STRING")
     RETURN_NAMES = ("IMAGE", "frame_count", "audio", "fps", "video_path")
