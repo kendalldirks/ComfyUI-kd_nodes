@@ -10,6 +10,8 @@ from .nodes.datatype import *
 from .nodes.load_video_kd import *
 from .nodes.save_video_kd import *
 from .nodes.extract_frame_kd import *
+from .nodes.crop_kd import *
+from .nodes.stitch_kd import *
 
 NODE_CONFIG = {
     #image nodes
@@ -20,6 +22,8 @@ NODE_CONFIG = {
     "ImageRebatchOverlap": {"class": ImageRebatchOverlap, "name": "Rebatch Images Overlap"},
     "UnbatchImagesOverlapBlend": {"class": UnbatchImagesOverlapBlend, "name": "Unbatch Images Overlap Blend"},
     "PreviewImageKD": {"class": PreviewImageKD, "name": "Preview Image KD"},
+    "CropImageKD": {"class": CropImageKD, "name": "Crop Image KD"},
+    "ImageStitcherKD": {"class": ImageStitcherKD, "name": "Image Stitcher"},
     "PreviewAnimationKD": {"class": PreviewAnimationKD, "name": "Preview Animation KD"},
 
     #video nodes

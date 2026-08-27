@@ -18,6 +18,23 @@ function chainCallback(object, property, callback) {
     }
 }
 
+// Match the canvas-drawn node text rather than the page font — LiteGraph
+// draws with these, so reading them keeps the caption looking native.
+const LG = globalThis.LiteGraph || {};
+const CAP_FONT = LG.NODE_FONT || "Arial";
+const CAP_SIZE = LG.NODE_SUBTEXT_SIZE || 12;
+const CAP_COLOR = LG.NODE_TEXT_COLOR || "#AAA";
+const CAPTION_H = CAP_SIZE + 6;
+const CAPTION_GAP = 5;      // breathing room under the video
+
+// Frames the node will actually produce, given the load settings.
+function effectiveFrames(total, cap, skip, nth) {
+    const available = Math.max(0, total - Math.max(0, skip || 0));
+    let n = Math.ceil(available / Math.max(1, nth || 1));
+    if (cap > 0) n = Math.min(n, cap);
+    return n;
+}
+
 function fitHeight(node) {
     node.setSize([node.size[0], node.computeSize([node.size[0], node.size[1]])[1]])
     node?.graph?.setDirtyCanvas(true);
@@ -39,6 +56,10 @@ function addVideoPreview(nodeType) {
                 let height = (previewNode.size[0] - 20) / this.aspectRatio + 10;
                 if (!(height > 0)) {
                     height = 0;
+                }
+                // Room for the dimensions / frame-count line underneath.
+                if (this.captionEl && this.captionEl.textContent) {
+                    height += CAPTION_H + CAPTION_GAP;
                 }
                 this.computedHeight = height + 10;
                 return [width, height];
@@ -109,6 +130,15 @@ function addVideoPreview(nodeType) {
 
         previewWidget.parentEl.appendChild(previewWidget.videoEl)
         previewWidget.parentEl.appendChild(previewWidget.imgEl)
+
+        previewWidget.captionEl = document.createElement("div");
+        previewWidget.captionEl.style.cssText =
+            "text-align:center;user-select:none;white-space:nowrap;" +
+            "overflow:hidden;text-overflow:ellipsis;" +
+            `margin-top:${CAPTION_GAP}px;` +
+            `height:${CAPTION_H}px;line-height:${CAPTION_H}px;` +
+            `font-family:${CAP_FONT};font-size:${CAP_SIZE}px;color:${CAP_COLOR};`;
+        element.appendChild(previewWidget.captionEl);
 
         var timeout = null;
         this.updateParameters = (params, force_update) => {
@@ -293,6 +323,10 @@ function addAnimationPreview(nodeType) {
             if (this.aspectRatio && !this.parentEl.hidden) {
                 let height = (node.size[0] - 20) / this.aspectRatio + 10;
                 if (!(height > 0)) height = 0;
+                // Room for the dimensions / frame-count line underneath.
+                if (this.captionEl && this.captionEl.textContent) {
+                    height += CAPTION_H + CAPTION_GAP;
+                }
                 this.computedHeight = height + 10;
                 return [width, height];
             }
@@ -339,9 +373,26 @@ function addAnimationPreview(nodeType) {
         videoEl.onmouseleave = () => { videoEl.muted = true; };
         previewWidget.parentEl.appendChild(videoEl);
 
+        previewWidget.captionEl = document.createElement("div");
+        previewWidget.captionEl.style.cssText =
+            "text-align:center;user-select:none;white-space:nowrap;" +
+            "overflow:hidden;text-overflow:ellipsis;" +
+            `margin-top:${CAPTION_GAP}px;` +
+            `height:${CAPTION_H}px;line-height:${CAPTION_H}px;` +
+            `font-family:${CAP_FONT};font-size:${CAP_SIZE}px;color:${CAP_COLOR};`;
+        element.appendChild(previewWidget.captionEl);
+
         // Point the preview at the mp4 the backend just wrote, via the native /view route
         this.updateAnimPreview = (p) => {
             previewWidget.parentEl.hidden = previewWidget.value.hidden;
+
+            // source_* rather than width/height: those describe the downscaled
+            // proxy that was written, not the images being previewed.
+            const SEP = "\u00A0\u00A0\u00A0";
+            const w = p.source_width || 0, h = p.source_height || 0;
+            const n = p.frames || 0;
+            previewWidget.captionEl.textContent =
+                w ? `${w} × ${h}${n ? SEP + n + " frames" : ""}` : "";
             videoEl.src = api.apiURL('/view?' + new URLSearchParams({
                 filename: p.filename,
                 subfolder: p.subfolder || "",
@@ -394,6 +445,55 @@ app.registerExtension({
         chainCallback(nodeType.prototype, "onNodeCreated", function() {
             const node = this
 
+            // Source dimensions / frame count for the caption under the preview.
+            // Held here so the caption can be recomputed when the load settings
+            // change without re-probing the file.
+            let srcInfo = null;
+            const previewWidget = this.widgets.find((w) => w.name === "videopreview");
+
+            const widgetVal = (name) =>
+                Number(node.widgets?.find((w) => w.name === name)?.value ?? 0);
+
+            function renderCaption() {
+                const el = previewWidget?.captionEl;
+                if (!el) return;
+                if (!srcInfo || !srcInfo.width) {
+                    el.textContent = "";
+                    return;
+                }
+                // Non-breaking spaces: HTML collapses ordinary runs of
+                // whitespace, which ran the two halves together.
+                const SEP = "\u00A0\u00A0\u00A0";
+                let text = `${srcInfo.width} × ${srcInfo.height}`;
+                const total = srcInfo.frame_count || 0;
+                if (total > 0) {
+                    const n = effectiveFrames(total, widgetVal("frame_load_cap"),
+                                              widgetVal("skip_first_frames"),
+                                              widgetVal("select_every_nth"));
+                    // Show both when the load settings trim the source, so it's
+                    // clear how many frames actually come out.
+                    text += n === total ? `${SEP}${total} frames`
+                                        : `${SEP}${n} of ${total} frames`;
+                }
+                el.textContent = text;
+                fitHeight(node);
+            }
+
+            async function probe(filename) {
+                srcInfo = null;
+                renderCaption();
+                if (!filename) return;
+                try {
+                    const res = await api.fetchApi(
+                        "/kd_nodes/video_info?" + new URLSearchParams({filename}));
+                    if (!res.ok) return;
+                    srcInfo = await res.json();
+                    renderCaption();
+                } catch (err) {
+                    console.warn("[LoadVideoKD] could not read video info:", err);
+                }
+            }
+
             // When video path changes, update preview
             const pathWidget = this.widgets.find((w) => w.name === "video");
             chainCallback(pathWidget, "callback", (value) => {
@@ -407,6 +507,7 @@ app.registerExtension({
                 format += "/" + extension;
                 let params = {filename: value, format: format};
                 this.updateParameters(params, true);
+                probe(value);
             });
 
             // When other widgets change, update preview params
@@ -415,6 +516,7 @@ app.registerExtension({
                     let params = {}
                     params[key] = this.value
                     node?.updateParameters(params)
+                    renderCaption();
                 }
             }
             let widgetMap = {

@@ -114,6 +114,41 @@ def _open_video_dialog(start_dir=""):
     return path or ""
 
 
+@PromptServer.instance.routes.get("/kd_nodes/video_info")
+async def video_info(request):
+    """
+    Dimensions, fps and frame count for the preview caption.
+
+    Read with cv2 rather than the <video> element, because the browser exposes
+    videoWidth/videoHeight but has no notion of a frame count.  This only reads
+    container headers, so it does not decode anything.
+    """
+    filename = request.query.get("filename", "")
+    if not filename or not os.path.isfile(filename):
+        return web.json_response({"error": "file not found"}, status=404)
+
+    cap = None
+    try:
+        cap = cv2.VideoCapture(filename)
+        if not cap.isOpened():
+            return web.json_response({"error": "could not open video"}, status=400)
+        info = {
+            "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0),
+            "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0),
+            "fps": float(cap.get(cv2.CAP_PROP_FPS) or 0.0),
+            # Some containers (webm, gif) don't declare this; 0 means "unknown"
+            # and the frontend just omits it from the caption.
+            "frame_count": max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)),
+        }
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    finally:
+        if cap is not None:
+            cap.release()
+
+    return web.json_response(info)
+
+
 @PromptServer.instance.routes.get("/kd_nodes/open_video")
 async def open_video_dialog(request):
     try:

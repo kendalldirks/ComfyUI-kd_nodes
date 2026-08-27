@@ -284,8 +284,20 @@ app.registerExtension({
         // however small, overshoots by one frame. Do not "fix" this.
         // mediaFps, never displayFps: this must track the loaded video.
         function gotoFrame(v) {
-            const maxIdx = totalFrames > 0 ? totalFrames - 1 : 0;
-            v = Math.max(0, Math.min(Math.round(v), maxIdx));
+            v = Math.max(0, Math.round(v));
+
+            // With no preview loaded there is no frame count to clamp against,
+            // so leave the value alone rather than pinning it to 0 — someone may
+            // already know the index they want. The scrubber has nothing to show
+            // yet either way; Python clamps to the last frame on execution.
+            if (totalFrames <= 0) {
+                frameWidget.value = v;
+                updateLabel(v);
+                return v;
+            }
+
+            const maxIdx = totalFrames - 1;
+            v = Math.min(v, maxIdx);
             slider.value = String(v);
             frameWidget.value = v;
             // Drives the filled section of the track. Unitless 0..1 so the CSS
@@ -293,7 +305,7 @@ app.registerExtension({
             slider.style.setProperty(
                 "--kd-p", (maxIdx > 0 ? v / maxIdx : 0).toFixed(5));
             updateLabel(v);
-            if (totalFrames > 0 && mediaFps > 0) requestSeek(v / mediaFps);
+            if (mediaFps > 0) requestSeek(v / mediaFps);
             return v;
         }
 

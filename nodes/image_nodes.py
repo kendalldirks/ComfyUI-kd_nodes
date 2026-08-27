@@ -657,6 +657,12 @@ class PreviewAnimationKD:
 
         # Downscales and converts in chunks, and hands back frames already at
         # their final even dimensions so ffmpeg needs no scale/pad filter.
+        # Source dimensions, captured before the proxy downscale so the preview
+        # caption can report the real size rather than the proxy's.
+        src = images if images is not None else masks
+        src_h = int(src.shape[1]) if src is not None else 0
+        src_w = int(src.shape[2]) if src is not None else 0
+
         frames = frames_to_uint8(images, masks, target_size=max_preview_size)
 
         if PREVIEW_PROFILE and frames is not None:
@@ -709,5 +715,8 @@ class PreviewAnimationKD:
         # Served through ComfyUI's native /view route (no re-transcode) for full quality.
         preview = {"filename": file, "subfolder": subfolder, "type": self.type,
                    "format": "video/mp4", "frames": num_frames, "fps": float(fps),
-                   "width": W, "height": H}
+                   # width/height describe the proxy that was written;
+                   # source_* is what the caption shows.
+                   "width": W, "height": H,
+                   "source_width": src_w, "source_height": src_h}
         return {"ui": {"kd_video": [preview]}, "result": (passthrough,)}
