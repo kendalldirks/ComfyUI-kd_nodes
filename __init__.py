@@ -35,6 +35,7 @@ NODE_CONFIG = {
     "ItemFromListString": {"class": ItemFromListString, "name": "Item From List (String)"},
     "StringToInt": {"class": StringToInt, "name": "String to Integer"},
     "IntToString": {"class": IntToString, "name": "Integer to String"},
+    "IntLTXLength": {"class": IntLTXLength, "name": "Int LTX Length"},
     "PurgeVRAM": {"class": PurgeVRAM, "name": "Purge VRAM"},
     "SetPath": {"class": SetPath, "name": "Set Path"},
     "Datatype": {"class": Datatype, "name": "Data Type"},

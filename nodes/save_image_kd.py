@@ -78,8 +78,12 @@ class SaveImageKD:
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("filename",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("filename", "save_path")
+    OUTPUT_TOOLTIPS = (
+        "Newline-separated list of the filenames written, one per line.",
+        "The folder the images were written to, including the auto-versioned subfolder if one was created.",
+    )
     FUNCTION = "save_images"
 
     OUTPUT_NODE = True
@@ -108,6 +112,7 @@ class SaveImageKD:
 
 
         counter = sequence_start_index
+        filenames = []
 
         mask_iter = mask if mask is not None else [None] * len(images)
 
@@ -132,6 +137,7 @@ class SaveImageKD:
 
             img.save(os.path.join(final_save_path, filename), pnginfo=metadata, compress_level=compression_level)
 
+            filenames.append(filename)
             counter += 1
 
-        return filename,
+        return "\n".join(filenames), final_save_path

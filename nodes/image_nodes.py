@@ -148,9 +148,11 @@ class ImageRebatchOverlap:
         start = 0
         while start < n:
             window = all_images[start:start + batch_size]
-            if not window:
-                break
             output_list.append(torch.cat(window, dim=0))  # (batch,H,W,C) (or shorter at end)
+            # A window that reaches the last frame ends the list; stepping on
+            # would only add a tail made entirely of already-covered frames.
+            if start + batch_size >= n:
+                break
             start += step
 
         return (output_list,)

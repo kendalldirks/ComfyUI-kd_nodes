@@ -240,3 +240,28 @@ class SAM3PointsToNativeCoords(io.ComfyNode):
 
         return io.NodeOutput(json.dumps(pos_out), json.dumps(neg_out))
 
+
+class IntLTXLength:
+    """
+    A frame count of the form 8n + 1, the lengths LTX accepts. The widget's step
+    only governs the arrows and drag, so a typed value is snapped to the nearest
+    valid length here and the output is always valid.
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "length": ("INT", {"default": 97, "min": 9, "max": 8193, "step": 8}),
+            },
+        }
+
+    RETURN_TYPES = ("INT",)
+    RETURN_NAMES = ("length",)
+
+    CATEGORY = "KDNodes/utility"
+    FUNCTION = "process"
+
+    def process(self, length: int) -> tuple:
+        n = max(1, round((length - 1) / 8))
+        return (8 * n + 1,)
